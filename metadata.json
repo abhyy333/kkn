@@ -1,0 +1,8 @@
+{
+  "name": "KKN SPACE - Modern KKN Management & Public Portal",
+  "description": "A minimalist, Notion-inspired workspace for student community service teams (KKN) featuring task coordination, village research, finance, documentation, and a public portal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
