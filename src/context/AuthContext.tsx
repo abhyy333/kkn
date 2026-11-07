@@ -14,6 +14,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
   collection,
   query,
   where,
@@ -30,6 +31,9 @@ export interface UserProfile {
   displayName: string;
   role: UserRole;
   division?: string;
+  position?: string;
+  memberId?: string;
+  invitationToken?: string;
   nim?: string;
   phone?: string;
   photoURL?: string;
@@ -43,6 +47,8 @@ export interface InvitationItem {
   email?: string;
   role: UserRole;
   division: string;
+  position?: string;
+  memberId?: string;
   token: string;
   invitedBy: string;
   status: 'pending' | 'accepted' | 'revoked';
@@ -60,6 +66,8 @@ export const PRE_SEEDED_TEAM_INVITATIONS: InvitationItem[] = [
     email: '',
     role: 'admin',
     division: 'Badan Pengurus Harian (BPH)',
+    position: 'Ketua Tim',
+    memberId: 'm-1',
     token: 'KKN-PRG-JOSUA-01',
     invitedBy: 'Sistem KKN SPACE (Administrator)',
     status: 'pending',
@@ -72,6 +80,8 @@ export const PRE_SEEDED_TEAM_INVITATIONS: InvitationItem[] = [
     email: '',
     role: 'admin',
     division: 'Badan Pengurus Harian (BPH)',
+    position: 'Sekretaris Tim',
+    memberId: 'm-2',
     token: 'KKN-PRG-MULIA-02',
     invitedBy: 'Sistem KKN SPACE (Administrator)',
     status: 'pending',
@@ -84,6 +94,8 @@ export const PRE_SEEDED_TEAM_INVITATIONS: InvitationItem[] = [
     email: '',
     role: 'admin',
     division: 'Badan Pengurus Harian (BPH)',
+    position: 'Bendahara Tim',
+    memberId: 'm-3',
     token: 'KKN-PRG-AMNI-03',
     invitedBy: 'Sistem KKN SPACE (Administrator)',
     status: 'pending',
@@ -96,6 +108,8 @@ export const PRE_SEEDED_TEAM_INVITATIONS: InvitationItem[] = [
     email: '',
     role: 'member',
     division: 'Divisi Acara',
+    position: 'Divisi Acara 1',
+    memberId: 'm-4',
     token: 'KKN-PRG-HABIR-04',
     invitedBy: 'Sistem KKN SPACE (Administrator)',
     status: 'pending',
@@ -108,6 +122,8 @@ export const PRE_SEEDED_TEAM_INVITATIONS: InvitationItem[] = [
     email: '',
     role: 'member',
     division: 'Divisi Acara',
+    position: 'Divisi Acara 2',
+    memberId: 'm-5',
     token: 'KKN-PRG-NADIYA-05',
     invitedBy: 'Sistem KKN SPACE (Administrator)',
     status: 'pending',
@@ -120,6 +136,8 @@ export const PRE_SEEDED_TEAM_INVITATIONS: InvitationItem[] = [
     email: '',
     role: 'member',
     division: 'Divisi PDD',
+    position: 'Divisi PDD 1',
+    memberId: 'm-6',
     token: 'KKN-PRG-AGITS-06',
     invitedBy: 'Sistem KKN SPACE (Administrator)',
     status: 'pending',
@@ -132,6 +150,8 @@ export const PRE_SEEDED_TEAM_INVITATIONS: InvitationItem[] = [
     email: '',
     role: 'member',
     division: 'Divisi PDD',
+    position: 'Divisi PDD 2',
+    memberId: 'm-7',
     token: 'KKN-PRG-AINUN-07',
     invitedBy: 'Sistem KKN SPACE (Administrator)',
     status: 'pending',
@@ -144,6 +164,8 @@ export const PRE_SEEDED_TEAM_INVITATIONS: InvitationItem[] = [
     email: '',
     role: 'member',
     division: 'Divisi Humper',
+    position: 'Divisi Humper 1',
+    memberId: 'm-8',
     token: 'KKN-PRG-ZIDANE-08',
     invitedBy: 'Sistem KKN SPACE (Administrator)',
     status: 'pending',
@@ -156,6 +178,8 @@ export const PRE_SEEDED_TEAM_INVITATIONS: InvitationItem[] = [
     email: '',
     role: 'member',
     division: 'Divisi Humper',
+    position: 'Divisi Humper 2',
+    memberId: 'm-9',
     token: 'KKN-PRG-DINI-09',
     invitedBy: 'Sistem KKN SPACE (Administrator)',
     status: 'pending',
@@ -168,6 +192,8 @@ export const PRE_SEEDED_TEAM_INVITATIONS: InvitationItem[] = [
     email: '',
     role: 'member',
     division: 'Divisi Konsumsi',
+    position: 'Divisi Konsumsi',
+    memberId: 'm-10',
     token: 'KKN-PRG-PUTU-10',
     invitedBy: 'Sistem KKN SPACE (Administrator)',
     status: 'pending',
@@ -180,6 +206,8 @@ export const PRE_SEEDED_TEAM_INVITATIONS: InvitationItem[] = [
     email: '',
     role: 'dpl',
     division: 'Dosen Pembimbing Lapangan (DPL)',
+    position: 'DPL (Read-Only)',
+    memberId: 'm-dpl',
     token: 'KKN-PRG-DPL-00',
     invitedBy: 'Sistem KKN SPACE (Administrator)',
     status: 'pending',
@@ -220,40 +248,117 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Initial bootstrap administrator email
-const BOOTSTRAP_ADMIN_EMAILS = ['abhyy333@gmail.com'];
+// Authorization roles are strictly bound to verified invitation tokens and Firestore RBAC.
+// No hardcoded emails with automatic admin privileges.
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load user profile from Firestore or bootstrap admin
+  // Load user profile from Firestore and reconcile role according to invitation/security rules
   const loadProfile = async (fbUser: FirebaseUser) => {
     try {
       const userDocRef = doc(db, 'users', fbUser.uid);
       const userSnap = await getDoc(userDocRef);
 
-      const isBootstrapAdmin =
-        BOOTSTRAP_ADMIN_EMAILS.includes(fbUser.email?.toLowerCase() || '');
+      // Check if this account belongs to Abdul Habir Al Majdi (Token: KKN-PRG-HABIR-04)
+      const isHabirAccount =
+        fbUser.email?.toLowerCase() === 'abhyy333@gmail.com' ||
+        (userSnap.exists() && (userSnap.data() as UserProfile).invitationToken === 'KKN-PRG-HABIR-04') ||
+        (userSnap.exists() && (userSnap.data() as UserProfile).memberId === 'm-4');
+
+      if (isHabirAccount) {
+        // Enforce strict member role and Divisi Acara 1 position
+        const correctedProfile: UserProfile = {
+          uid: fbUser.uid,
+          email: fbUser.email || 'abhyy333@gmail.com',
+          displayName: 'Abdul Habir Al Majdi',
+          role: 'member', // Strictly regular member, NEVER admin
+          division: 'Divisi Acara',
+          position: 'Divisi Acara 1',
+          memberId: 'm-4',
+          invitationToken: 'KKN-PRG-HABIR-04',
+          photoURL: fbUser.photoURL || undefined,
+        };
+
+        // 1. Relinquish any accidental admin registry doc
+        try {
+          await deleteDoc(doc(db, 'admins', fbUser.uid));
+        } catch (e) {
+          console.warn('Admin entry cleanup notice:', e);
+        }
+
+        // 2. Persist corrected profile in users/{uid}
+        await setDoc(
+          userDocRef,
+          {
+            ...correctedProfile,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        // 3. Mark official member profile m-4 as active and linked to this UID
+        try {
+          await setDoc(
+            doc(db, 'members', 'm-4'),
+            {
+              id: 'm-4',
+              accountStatus: 'active',
+              authUid: fbUser.uid,
+              email: fbUser.email || 'abhyy333@gmail.com',
+            },
+            { merge: true }
+          );
+        } catch (e) {
+          console.warn('Member m-4 activation notice:', e);
+        }
+
+        // 4. Mark invitation as accepted
+        try {
+          await setDoc(
+            doc(db, 'invitations', 'inv-abdul-habir'),
+            {
+              id: 'inv-abdul-habir',
+              name: 'Abdul Habir Al Majdi',
+              email: fbUser.email || 'abhyy333@gmail.com',
+              role: 'member',
+              division: 'Divisi Acara',
+              position: 'Divisi Acara 1',
+              memberId: 'm-4',
+              token: 'KKN-PRG-HABIR-04',
+              status: 'accepted',
+              acceptedAt: serverTimestamp(),
+              acceptedByUid: fbUser.uid,
+            },
+            { merge: true }
+          );
+        } catch (e) {
+          console.warn('Invitation inv-abdul-habir status notice:', e);
+        }
+
+        setProfile(correctedProfile);
+        return;
+      }
 
       if (userSnap.exists()) {
         const data = userSnap.data() as UserProfile;
-        // Ensure bootstrap admin maintains admin role
-        if (isBootstrapAdmin && data.role !== 'admin') {
-          await updateDoc(userDocRef, { role: 'admin' });
-          await setDoc(doc(db, 'admins', fbUser.uid), { uid: fbUser.uid, email: fbUser.email });
-          data.role = 'admin';
+        // Non-admin accounts must not have entries in admins collection
+        if (data.role !== 'admin') {
+          try {
+            await deleteDoc(doc(db, 'admins', fbUser.uid));
+          } catch (_) {}
         }
         setProfile(data);
       } else {
-        // Create initial profile for user
+        // Fallback profile for unregistered users: defaults strictly to member, never admin
         const newProfile: UserProfile = {
           uid: fbUser.uid,
           email: fbUser.email || '',
           displayName: fbUser.displayName || fbUser.email?.split('@')[0] || 'Anggota KKN',
-          role: isBootstrapAdmin ? 'admin' : 'member',
-          division: isBootstrapAdmin ? 'Badan Pengurus Harian (BPH)' : 'Divisi Mahasiswa',
+          role: 'member',
+          division: 'Divisi Mahasiswa',
           photoURL: fbUser.photoURL || undefined,
         };
 
@@ -263,23 +368,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           updatedAt: serverTimestamp(),
         });
 
-        if (isBootstrapAdmin) {
-          await setDoc(doc(db, 'admins', fbUser.uid), {
-            uid: fbUser.uid,
-            email: fbUser.email,
-          });
-        }
-
         setProfile(newProfile);
       }
     } catch (err) {
-      console.error('Error loading or creating user profile:', err);
-      // Fallback profile from auth
+      console.error('Error loading user profile:', err);
+      // Safe fallback: regular member
       setProfile({
         uid: fbUser.uid,
         email: fbUser.email || '',
         displayName: fbUser.displayName || 'Anggota KKN',
-        role: BOOTSTRAP_ADMIN_EMAILS.includes(fbUser.email?.toLowerCase() || '') ? 'admin' : 'member',
+        role: 'member',
       });
     }
   };
@@ -355,18 +453,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error(`Kode undangan ini dikhususkan untuk email: ${invData.email}`);
     }
 
-    // 2. Create Firebase Auth user with the user's authentic credentials
+    // 2. Create Firebase Auth user with authentic credentials
     const cred = await createUserWithEmailAndPassword(auth, trimmedEmail, pass);
     const resolvedName = displayName?.trim() || invData.name || 'Anggota KKN';
     await updateProfile(cred.user, { displayName: resolvedName });
 
-    // 3. Create Firestore profile with the server-assigned invitation role (No self-assignment)
+    // 3. Create Firestore profile with the server-assigned invitation role & position (No self-assignment)
     const newProfile: UserProfile = {
       uid: cred.user.uid,
       email: trimmedEmail,
       displayName: resolvedName,
       role: invData.role,
       division: invData.division,
+      position: invData.position || invData.division,
+      memberId: invData.memberId,
+      invitationToken: cleanToken,
     };
 
     await setDoc(doc(db, 'users', cred.user.uid), {
@@ -380,6 +481,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         uid: cred.user.uid,
         email: trimmedEmail,
       });
+    } else {
+      try {
+        await deleteDoc(doc(db, 'admins', cred.user.uid));
+      } catch (_) {}
     }
 
     // 4. Mark invitation as accepted
@@ -397,6 +502,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
     } catch (err) {
       console.warn('Invitation status update notice:', err);
+    }
+
+    // 5. Link and activate official member record
+    if (invData.memberId) {
+      try {
+        await setDoc(
+          doc(db, 'members', invData.memberId),
+          {
+            accountStatus: 'active',
+            authUid: cred.user.uid,
+            email: trimmedEmail,
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn('Member directory status update notice:', err);
+      }
     }
 
     setProfile(newProfile);
@@ -427,6 +549,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       displayName: resolvedName,
       role: invData.role,
       division: invData.division,
+      position: invData.position || invData.division,
+      memberId: invData.memberId,
+      invitationToken: cleanToken,
       photoURL: googleUser.photoURL || undefined,
     };
 
@@ -441,6 +566,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         uid: googleUser.uid,
         email: realEmail,
       });
+    } else {
+      try {
+        await deleteDoc(doc(db, 'admins', googleUser.uid));
+      } catch (_) {}
     }
 
     try {
@@ -457,6 +586,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
     } catch (err) {
       console.warn('Invitation update notice:', err);
+    }
+
+    if (invData.memberId) {
+      try {
+        await setDoc(
+          doc(db, 'members', invData.memberId),
+          {
+            accountStatus: 'active',
+            authUid: googleUser.uid,
+            email: realEmail,
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn('Member directory status update notice:', err);
+      }
     }
 
     setProfile(newProfile);

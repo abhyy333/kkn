@@ -44,6 +44,7 @@ export interface Member {
   invitationToken?: string;
   systemRole?: 'admin' | 'member' | 'dpl' | 'viewer';
   accountStatus?: 'pending_invitation' | 'active';
+  authUid?: string;
 }
 
 export interface MeetingItem {

@@ -9,7 +9,7 @@ interface SecurityContext {
 
 function evaluateCanWriteWorkspace(ctx: SecurityContext): boolean {
   if (!ctx.auth) return false;
-  if (ctx.userRole === 'admin' || ctx.auth.email === 'abhyy333@gmail.com') return true;
+  if (ctx.userRole === 'admin') return true;
   if (ctx.userRole === 'dpl') return false; // DPL is strictly read-only
   if (ctx.userRole === 'viewer') return false;
   return ctx.userRole === 'member';
@@ -17,13 +17,13 @@ function evaluateCanWriteWorkspace(ctx: SecurityContext): boolean {
 
 function evaluateCanCreateInvitation(ctx: SecurityContext): boolean {
   if (!ctx.auth) return false;
-  return ctx.userRole === 'admin' || ctx.auth.email === 'abhyy333@gmail.com';
+  return ctx.userRole === 'admin';
 }
 
 function evaluateCanAssignRole(ctx: SecurityContext, requestedRole: string): boolean {
   if (!ctx.auth) return false;
   if (requestedRole === 'admin') {
-    return ctx.userRole === 'admin' || ctx.auth.email === 'abhyy333@gmail.com';
+    return ctx.userRole === 'admin';
   }
   return true;
 }
@@ -55,18 +55,29 @@ test('Security Invariant: Members have workspace write access but cannot issue i
 
 function evaluateCanMutateMember(ctx: SecurityContext): boolean {
   if (!ctx.auth) return false;
-  return ctx.userRole === 'admin' || ctx.auth.email === 'abhyy333@gmail.com';
+  return ctx.userRole === 'admin';
 }
 
 test('Security Invariant: Admin has full authority to invite and write', () => {
   const adminCtx: SecurityContext = {
-    auth: { uid: 'admin-uid-789', email: 'abhyy333@gmail.com' },
+    auth: { uid: 'admin-uid-789', email: 'bph.ketua@kkn.ac.id' },
     userRole: 'admin',
   };
   assert.equal(evaluateCanWriteWorkspace(adminCtx), true);
   assert.equal(evaluateCanCreateInvitation(adminCtx), true);
   assert.equal(evaluateCanAssignRole(adminCtx, 'admin'), true);
   assert.equal(evaluateCanMutateMember(adminCtx), true, 'Admin can update team member profiles in Firestore');
+});
+
+test('Security Invariant: Abdul Habir Al Majdi has member role and no admin privileges', () => {
+  const habirCtx: SecurityContext = {
+    auth: { uid: 'habir-uid-101', email: 'abhyy333@gmail.com' },
+    userRole: 'member',
+  };
+  assert.equal(evaluateCanWriteWorkspace(habirCtx), true, 'Abdul Habir Al Majdi can write workspace content');
+  assert.equal(evaluateCanCreateInvitation(habirCtx), false, 'Abdul Habir Al Majdi cannot issue invitations');
+  assert.equal(evaluateCanAssignRole(habirCtx, 'admin'), false, 'Abdul Habir Al Majdi cannot assign admin roles');
+  assert.equal(evaluateCanMutateMember(habirCtx), false, 'Abdul Habir Al Majdi cannot mutate other members');
 });
 
 test('Security Invariant: Non-admin members cannot mutate official team directory records', () => {
@@ -79,4 +90,5 @@ test('Security Invariant: Non-admin members cannot mutate official team director
   const unauthCtx: SecurityContext = { auth: null };
   assert.equal(evaluateCanMutateMember(unauthCtx), false, 'Unauthenticated visitor cannot mutate member profiles');
 });
+
 

@@ -18,10 +18,7 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && (
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        request.auth.token.email == 'abhyy333@gmail.com'
-      );
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
     function isDpl() {
@@ -59,15 +56,17 @@ service cloud.firestore {
         incoming().email.size() <= 128 &&
         ((incoming().role in ['member', 'dpl', 'viewer']) || isAdmin());
       allow update: if isValidId(userId) && (
-        (isOwner(userId) && incoming().uid == existing().uid && (isAdmin() || incoming().role == existing().role)) ||
+        (isOwner(userId) && incoming().uid == existing().uid && (isAdmin() || incoming().role == existing().role || (existing().role == 'admin' && incoming().role == 'member'))) ||
         isAdmin()
       );
       allow delete: if isValidId(userId) && isAdmin();
     }
 
-    // 2. Admins Registry: Restricted strictly to current Admins
+    // 2. Admins Registry: Restricted strictly to current Admins (or voluntary self-drop)
     match /admins/{userId} {
-      allow read, write: if isValidId(userId) && isAdmin();
+      allow read: if isValidId(userId) && (isAdmin() || isOwner(userId));
+      allow create, update: if isValidId(userId) && isAdmin();
+      allow delete: if isValidId(userId) && (isAdmin() || isOwner(userId));
     }
 
     // 3. Invitations: Invitation-Only Access Gate
@@ -97,11 +96,18 @@ service cloud.firestore {
       allow create, update, delete: if isValidId(programId) && canWriteWorkspace();
     }
 
-    // Team Members Directory (Managed strictly by Admins, read by workspace)
+    // Team Members Directory (Managed strictly by Admins, read by workspace, activation allowed by claimer)
     match /members/{memberId} {
       allow get: if isValidId(memberId);
       allow list: if true;
-      allow create, update, delete: if isValidId(memberId) && isAdmin();
+      allow create, delete: if isValidId(memberId) && isAdmin();
+      allow update: if isValidId(memberId) && (
+        isAdmin() ||
+        (isSignedIn() &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['accountStatus', 'authUid', 'email']) &&
+         incoming().accountStatus == 'active' &&
+         incoming().authUid == request.auth.uid)
+      );
     }
 
     // 6. Private Workspace Collections (DPL has Read-Only, Members & Admins have Write)
