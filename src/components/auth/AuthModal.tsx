@@ -143,7 +143,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const cleanEmail = email.trim().toLowerCase();
       const record = await checkRegisteredEmail(cleanEmail);
       if (!record) {
-        setError('Email belum terdaftar. Silakan hubungi administrator.');
+        setError('Email ini belum didaftarkan oleh Administrator KKN.');
         setVerifiedRecord(null);
         return;
       }
@@ -162,12 +162,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       setVerifiedRecord(record);
       setSuccessMsg(
-        `Identitas terverifikasi dari database: ${record.name} (${record.position})`
+        `Identitas terverifikasi dari undangan Admin: ${record.name} (${record.position})`
       );
     } catch (err: any) {
       setError(
-        err.message || 'Email belum terdaftar. Silakan hubungi administrator.'
+        err.message || 'Email ini belum didaftarkan oleh Administrator KKN.'
       );
+      setVerifiedRecord(null);
     } finally {
       setLoading(false);
     }
@@ -256,14 +257,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               ? 'Pemulihan Password Akun'
               : tab === 'signin'
                 ? 'Masuk ke Ruang Kerja Tim'
-                : 'Aktivasi Akun Anggota Terdaftar'}
+                : 'Aktivasi Akun dari Undangan Admin'}
           </h2>
           <p className="text-xs text-gray-300 mt-1">
             {isForgotPassword
               ? 'Kami akan mengirimkan tautan pemulihan password ke alamat email terdaftar Anda.'
               : tab === 'signin'
                 ? 'Masuk menggunakan email dan password akun KKN SPACE Anda.'
-                : 'Khusus aktivasi pertama kali bagi anggota & DPL yang emailnya sudah didaftarkan oleh Admin.'}
+                : 'Halaman khusus aktivasi akun bagi anggota & DPL yang telah didaftarkan dan diundang oleh Admin.'}
           </p>
         </div>
 
@@ -303,7 +304,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 : 'text-gray-500 hover:text-gray-800'
             }`}
           >
-            Aktivasi Akun Anggota
+            Aktivasi Akun dari Undangan Admin
           </button>
         </div>
 
@@ -562,13 +563,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             /* Step 1: Validate Email against registered_emails (Initial Activation Only) */
             <form onSubmit={handleCheckEmailStep} className="space-y-3.5">
               <div className="bg-[#EBF3ED] border border-[#C6DEC9] p-3 rounded-lg text-xs text-[#2F5238] leading-relaxed">
-                <strong>Langkah 1 — Validasi Email Terdaftar:</strong> Masukkan
-                alamat email Anda untuk aktivasi pertama kali.
+                <strong>Verifikasi Email Undangan:</strong> Masukkan
+                alamat email resmi yang telah didaftarkan oleh Administrator KKN untuk aktivasi akun.
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">
-                  Alamat Email Anggota / DPL
+                  Alamat Email Anggota / DPL (Terdaftar oleh Admin)
                 </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" />
@@ -577,7 +578,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="Contoh: abhyy333@gmail.com"
+                    placeholder="Contoh: nama@domain.com"
                     className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-gray-300 rounded-lg focus:outline-hidden focus:border-[#4A6B53]"
                   />
                 </div>
@@ -588,29 +589,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 disabled={loading}
                 className="w-full py-2.5 px-4 bg-[#4A6B53] hover:bg-[#3d5844] text-white font-medium text-sm rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                {loading ? 'Memeriksa Email...' : 'Lanjutkan Aktivasi Akun'}
+                {loading ? 'Memeriksa Undangan...' : 'Lanjutkan Aktivasi Akun'}
                 <ArrowRight className="w-4 h-4" />
               </button>
             </form>
           ) : (
-            /* Step 2: Read-Only Database Identity + Password Setup */
+            /* Step 2: Read-Only Database Identity + Password Setup (No Ganti Email) */
             <form onSubmit={handleActivateSubmit} className="space-y-3.5">
               <div className="bg-white border border-[#C6DEC9] rounded-xl p-3.5 space-y-2 shadow-2xs">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#4A6B53] bg-[#EBF3ED] px-2 py-0.5 rounded">
-                    Identitas Database Terverifikasi
+                    Identitas Terdaftar (Read-Only)
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setVerifiedRecord(null);
-                      clearPasswords();
-                      resetMessages();
-                    }}
-                    className="text-[11px] text-gray-400 hover:text-gray-700 underline"
-                  >
-                    Ganti Email
-                  </button>
+                  <span className="text-[11px] text-stone-500 font-mono">
+                    Undangan Admin
+                  </span>
                 </div>
                 <div className="space-y-1">
                   <div className="text-sm font-bold text-gray-900">

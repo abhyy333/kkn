@@ -1,17 +1,17 @@
 // @ts-nocheck
 // =============================================================================
-// SUPABASE EDGE FUNCTION: admin-register-member-email (v1.2.0)
+// SUPABASE EDGE FUNCTION: admin-register-member-email (v1.3.0)
 // Project: scslevzuxxkfcuvwbtty
 // Description:
-//   Privileged server-side Edge Function to register official member & DPL login emails:
-//   - Validates email format and strictly enforces uniqueness in registered_emails
-//   - Stores record in registered_emails with status: 'pending_activation'
-//   - Does NOT create a Supabase Auth user prior to member activation
-//   - Updates members table email & status without altering existing profile data
-//   - Records audit log in member_email_history & admin_activity_logs
+//   Privileged server-side Edge Function to manage member & DPL login registrations & invitations:
+//   - Action 'register': Validates format & uniqueness, registers in registered_emails (pending_activation),
+//     triggers Supabase Auth inviteUserByEmail, tracks delivery status (including Gmail SMTP 535),
+//     preserves registered_emails row if SMTP fails, and records audit logs.
+//   - Action 'resend_invitation': Retries sending invitation to existing registered email
+//     without creating duplicate rows, updates delivery status, records audit logs.
 // Security:
 //   - Strict CORS origin allowlist (Vercel production, KKN preview URLs, localhost, AI Studio)
-//   - OPTIONS returns HTTP 200 with full CORS headers without requiring Bearer token
+//   - OPTIONS returns HTTP 200 without requiring Bearer token
 //   - POST requires valid session and verified Super Admin role
 // =============================================================================
 
@@ -24,9 +24,42 @@ const OFFICIAL_DPL_MEMBER_ID = 'c7bf53d4-1c27-424e-992a-7c7c0f98707a';
 interface RegisterEmailPayload {
   project_id?: string;
   member_id: string;
-  email: string;
+  email?: string;
   confirm_member_name?: string;
   reason?: string;
+  action?: 'register' | 'resend_invitation';
+}
+
+function parseSmtpError(rawMsg: string): { code: string; message: string } {
+  const lower = rawMsg.toLowerCase();
+  if (lower.includes('535') || lower.includes('username and password not accepted') || lower.includes('badcredentials') || lower.includes('authentication failed')) {
+    return {
+      code: 'smtp_rejected',
+      message: 'SMTP Error (535 5.7.8): Username and Password not accepted. Kredensial App Password Gmail pada konfigurasi SMTP Supabase ditolak.',
+    };
+  }
+  if (lower.includes('rate limit') || lower.includes('too many') || lower.includes('over_email_send_rate_limit')) {
+    return {
+      code: 'rate_limit',
+      message: 'Batas frekuensi pengiriman email Supabase tercapai. Silakan coba kirim ulang sesaat lagi.',
+    };
+  }
+  if (lower.includes('already registered') || lower.includes('user already exists')) {
+    return {
+      code: 'already_exists',
+      message: 'Akun Auth untuk email ini sudah terdaftar di Supabase Auth.',
+    };
+  }
+  if (lower.includes('timeout') || lower.includes('connection refused') || lower.includes('network')) {
+    return {
+      code: 'smtp_unavailable',
+      message: 'Server SMTP tidak dapat dijangkau saat ini.',
+    };
+  }
+  return {
+    code: 'general_error',
+    message: rawMsg,
+  };
 }
 
 Deno.serve(async (req: Request) => {
@@ -126,18 +159,113 @@ Deno.serve(async (req: Request) => {
 
     if (!isCallerSuperAdmin) {
       return new Response(
-        JSON.stringify({ error: 'Forbidden: Hanya Super Admin yang diizinkan mendaftarkan email anggota atau DPL.' }),
+        JSON.stringify({ error: 'Forbidden: Hanya Super Admin yang diizinkan mengelola registrasi atau undangan email.' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     // 5. Parse request body
     const body = (await req.json()) as RegisterEmailPayload;
-    const { member_id, email, confirm_member_name, reason } = body;
+    const { member_id, email, confirm_member_name, reason, action = 'register' } = body;
 
-    if (!member_id || !email) {
+    if (!member_id) {
       return new Response(
-        JSON.stringify({ error: 'Parameter member_id dan email wajib diisi.' }),
+        JSON.stringify({ error: 'Parameter member_id wajib diisi.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const nowIso = new Date().toISOString();
+
+    // -------------------------------------------------------------------------
+    // ACTION: RESEND INVITATION (Retry invitation without duplicate row)
+    // -------------------------------------------------------------------------
+    if (action === 'resend_invitation') {
+      const { data: existingReg } = await adminClient
+        .from('registered_emails')
+        .select('*')
+        .eq('member_id', member_id)
+        .maybeSingle();
+
+      if (!existingReg || !existingReg.email) {
+        return new Response(
+          JSON.stringify({ error: 'Belum ada email yang terdaftar untuk anggota ini. Daftarkan email terlebih dahulu.' }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      let deliveryStatus = 'sent';
+      let deliveryError = null;
+
+      try {
+        const { error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
+          existingReg.email,
+          {
+            data: {
+              name: existingReg.name || existingReg.member_name,
+              member_id: existingReg.member_id,
+              role: existingReg.role || existingReg.system_role || 'member',
+            },
+          }
+        );
+
+        if (inviteErr) {
+          const parsed = parseSmtpError(inviteErr.message);
+          deliveryStatus = 'failed';
+          deliveryError = parsed.message;
+        }
+      } catch (err: any) {
+        const parsed = parseSmtpError(err?.message || 'SMTP delivery failed');
+        deliveryStatus = 'failed';
+        deliveryError = parsed.message;
+      }
+
+      // Update existing row in registered_emails (NEVER create a new row)
+      await adminClient
+        .from('registered_emails')
+        .update({
+          invitation_delivery_status: deliveryStatus,
+          invitation_delivery_error: deliveryError,
+          invitation_last_sent_at: nowIso,
+          updated_at: nowIso,
+        })
+        .eq('id', existingReg.id);
+
+      // Audit log
+      try {
+        await adminClient.from('admin_activity_logs').insert({
+          id: `log-${Date.now()}`,
+          actor_email: callerEmail,
+          actor_name: 'Super Admin',
+          action: 'RESEND_INVITATION',
+          target: `${existingReg.name} (${existingReg.email})`,
+          details: `Mengirim ulang undangan ke ${existingReg.email}. Hasil pengiriman: ${deliveryStatus === 'sent' ? 'Terkirim' : `Gagal (${deliveryError})`}`,
+          timestamp: nowIso,
+        });
+      } catch {}
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          action: 'resend_invitation',
+          email: existingReg.email,
+          name: existingReg.name,
+          invitation_delivery_status: deliveryStatus,
+          invitation_delivery_error: deliveryError,
+          message: deliveryStatus === 'sent'
+            ? `Undangan aktivasi berhasil dikirim ulang ke ${existingReg.email}.`
+            : `Undangan email belum dapat dikirim via SMTP (${deliveryError}). Email pendaftaran tetap aman tersimpan.`,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // ACTION: REGISTER (First registration or update assignment)
+    // -------------------------------------------------------------------------
+    if (!email) {
+      return new Response(
+        JSON.stringify({ error: 'Parameter email wajib diisi.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -207,7 +335,6 @@ Deno.serve(async (req: Request) => {
       (isSupervisor ? 'Supervisi' : 'Divisi Acara');
 
     const systemRole = isSupervisor ? 'dpl' : 'member';
-    const nowIso = new Date().toISOString();
 
     // Check existing registration row for this member
     const { data: existingReg } = await adminClient
@@ -218,7 +345,34 @@ Deno.serve(async (req: Request) => {
 
     const previousEmail = existingReg?.email || memberRow?.email || null;
 
-    // 8. Store in registered_emails (pending_activation status, NO Auth user created)
+    // 8. Attempt sending Supabase Auth invitation
+    let invitationStatus = 'sent';
+    let invitationError = null;
+
+    try {
+      const { error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
+        cleanEmail,
+        {
+          data: {
+            name: memberName,
+            member_id,
+            role: isSupervisor ? 'dpl' : 'member',
+          },
+        }
+      );
+
+      if (inviteErr) {
+        const parsed = parseSmtpError(inviteErr.message);
+        invitationStatus = 'failed';
+        invitationError = parsed.message;
+      }
+    } catch (inviteEx: any) {
+      const parsed = parseSmtpError(inviteEx?.message || 'SMTP delivery failed');
+      invitationStatus = 'failed';
+      invitationError = parsed.message;
+    }
+
+    // 9. Store in registered_emails (CRITICAL: KEEP registration even if SMTP delivery failed)
     const regPayload = {
       email: cleanEmail,
       member_id,
@@ -231,6 +385,9 @@ Deno.serve(async (req: Request) => {
       status: 'pending_activation',
       is_active: true,
       auth_user_id: null,
+      invitation_delivery_status: invitationStatus,
+      invitation_delivery_error: invitationError,
+      invitation_last_sent_at: nowIso,
       registered_by: callerEmail,
       registered_at: nowIso,
     };
@@ -256,7 +413,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // 9. Update members table (preserve all identity, academic, and role fields)
+    // 10. Update members table (preserve all identity, academic, and role fields)
     if (memberRow?.id) {
       await adminClient
         .from('members')
@@ -279,7 +436,7 @@ Deno.serve(async (req: Request) => {
         .eq('id', member_id);
     }
 
-    // 10. Record in member_email_history
+    // 11. Record in member_email_history
     try {
       await adminClient.from('member_email_history').insert({
         member_id,
@@ -295,7 +452,7 @@ Deno.serve(async (req: Request) => {
       console.warn('member_email_history insert notice:', histErr);
     }
 
-    // 11. Record in admin_activity_logs
+    // 12. Record in admin_activity_logs
     try {
       await adminClient.from('admin_activity_logs').insert({
         id: `log-${Date.now()}`,
@@ -303,12 +460,20 @@ Deno.serve(async (req: Request) => {
         actor_name: 'Super Admin',
         action: isSupervisor ? 'REGISTER_DPL_EMAIL' : 'REGISTER_MEMBER_EMAIL',
         target: `${memberName} (${cleanEmail})`,
-        details: `Registrasi email login: ${cleanEmail}. Status: Menunggu Aktivasi. Alasan: ${reason || '-'}`,
+        details: `Registrasi email login: ${cleanEmail}. Pengiriman undangan: ${invitationStatus === 'sent' ? 'Berhasil' : `Terkendala (${invitationError})`}`,
         timestamp: nowIso,
       });
     } catch (logErr) {
       console.warn('admin_activity_logs insert notice:', logErr);
     }
+
+    const message = invitationStatus === 'sent'
+      ? (isSupervisor
+          ? `Email DPL (${cleanEmail}) berhasil didaftarkan dan undangan email berhasil dikirim.`
+          : `Email anggota (${cleanEmail}) berhasil didaftarkan dan undangan email berhasil dikirim.`)
+      : (isSupervisor
+          ? `Email DPL (${cleanEmail}) berhasil didaftarkan. Pengiriman undangan otomatis terkendala konfigurasi SMTP (${invitationError}). Email pendaftaran tetap disimpan dan dapat dikirim ulang oleh Admin.`
+          : `Email anggota (${cleanEmail}) berhasil didaftarkan. Pengiriman undangan otomatis terkendala konfigurasi SMTP (${invitationError}). Email pendaftaran tetap disimpan dan dapat dikirim ulang oleh Admin.`);
 
     return new Response(
       JSON.stringify({
@@ -317,9 +482,9 @@ Deno.serve(async (req: Request) => {
         email: cleanEmail,
         name: memberName,
         status: 'pending_activation',
-        message: isSupervisor
-          ? `Email DPL (${cleanEmail}) berhasil didaftarkan. Status: Menunggu Aktivasi.`
-          : `Email anggota (${cleanEmail}) berhasil didaftarkan. Status: Menunggu Aktivasi.`,
+        invitation_delivery_status: invitationStatus,
+        invitation_delivery_error: invitationError,
+        message,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

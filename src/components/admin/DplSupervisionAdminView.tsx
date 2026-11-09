@@ -3,7 +3,6 @@ import { ReportRecord, Member } from '../../types';
 import { OFFICIAL_PROJECT_ID, OFFICIAL_DPL_MEMBER_ID, DPL_SUPERVISOR } from '../../data/mockData';
 import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { triggerFileDownload } from '../../utils/storageService';
-import { DplManagementModal } from './DplManagementModal';
 import {
   GraduationCap,
   Mail,
@@ -53,7 +52,6 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
 }) => {
   const [registeredDpl, setRegisteredDpl] = useState<RegisteredDplRecord | null>(null);
   const [reviewLogs, setReviewLogs] = useState<DplReviewLogRecord[]>([]);
-  const [isDplModalOpen, setIsDplModalOpen] = useState(false);
   const [selectedReport, setSelectedReport] = useState<ReportRecord | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -116,16 +114,6 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
-      {/* Manage DPL Modal */}
-      <DplManagementModal
-        isOpen={isDplModalOpen}
-        onClose={() => setIsDplModalOpen(false)}
-        onRefreshData={() => {
-          loadDplSupervisionData();
-          if (onRefreshData) onRefreshData();
-        }}
-      />
-
       {/* Header Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#E8E6DF]">
         <div className="space-y-1">
@@ -138,16 +126,18 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
             </h1>
           </div>
           <p className="text-xs text-stone-500">
-            Panel khusus Super Admin untuk memantau aktivitas evaluasi Dosen Pembimbing Lapangan, status akun DPL, dan dokumen laporan tanpa melakukan impersonasi.
+            Panel khusus Super Admin untuk memantau aktivitas evaluasi Dosen Pembimbing Lapangan, status akun DPL, dan dokumen laporan. Pengelolaan registrasi email DPL terpusat di Admin Console (/admin/members).
           </p>
         </div>
 
         <button
-          onClick={() => setIsDplModalOpen(true)}
+          onClick={() => {
+            window.location.hash = '#admin';
+          }}
           className="flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#284230] text-white text-xs font-medium hover:bg-[#1E3224] transition-colors shadow-2xs self-start sm:self-auto"
         >
           <Edit3 className="w-4 h-4 text-emerald-400" />
-          <span>Kelola Email & Akses DPL</span>
+          <span>Kelola DPL di Admin Console</span>
         </button>
       </div>
 
@@ -199,10 +189,12 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
               <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1">
                 <span className="font-semibold block text-[11px]">Status Email: Belum Didaftarkan</span>
                 <button
-                  onClick={() => setIsDplModalOpen(true)}
+                  onClick={() => {
+                    window.location.hash = '#admin';
+                  }}
                   className="px-3 py-1 rounded bg-[#4A6B53] text-white font-medium hover:bg-[#3B5643] text-[11px] block w-full text-center"
                 >
-                  Daftarkan Email DPL
+                  Kelola DPL di Admin Console
                 </button>
               </div>
             )}

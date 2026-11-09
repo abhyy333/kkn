@@ -519,8 +519,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const cleanEmail = emailInput.trim().toLowerCase();
     if (!cleanEmail || isFabricatedLegacyRecord({ email: cleanEmail })) return null;
 
-    // 1. Single query against Supabase `registered_emails`
-    if (isSupabaseConfigured) {
+    // 1. If user is authenticated, query registered_emails table
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (sessionData?.session?.user && isSupabaseConfigured) {
       try {
         const { data: sbRow, error: sbError } = await supabase
           .from('registered_emails')
@@ -540,7 +541,80 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // 2. Fast local allowlist check
+    // 2. For unauthenticated activation checks, call secure server-side eligibility endpoint
+    try {
+      // First attempt Supabase Edge Function: check-activation-eligibility
+      let edgeRes: any = null;
+      if (isSupabaseConfigured) {
+        try {
+          const { data, error } = await supabase.functions.invoke('check-activation-eligibility', {
+            body: { email: cleanEmail },
+          });
+          if (!error && data) {
+            edgeRes = data;
+          }
+        } catch {}
+      }
+
+      // Fallback to local server proxy endpoint /api/auth/check-activation-eligibility
+      if (!edgeRes) {
+        const res = await fetch('/api/auth/check-activation-eligibility', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: cleanEmail }),
+        });
+        if (res.ok) {
+          edgeRes = await res.json();
+        }
+      }
+
+      if (edgeRes) {
+        if (!edgeRes.eligible) {
+          if (edgeRes.code === 'unregistered_email') {
+            throw new Error('Email ini belum didaftarkan oleh Administrator KKN.');
+          }
+          if (edgeRes.code === 'delivery_failed') {
+            throw new Error('Undangan belum dapat dikirim. Silakan hubungi Administrator KKN.');
+          }
+          if (edgeRes.code === 'existing_auth_account') {
+            throw new Error('Akun untuk email ini sudah aktif. Silakan masuk melalui tab "Masuk Akun" menggunakan email dan password Anda.');
+          }
+          if (edgeRes.code === 'account_disabled') {
+            throw new Error('Akun ini telah dinonaktifkan oleh Administrator KKN.');
+          }
+          throw new Error(edgeRes.message || edgeRes.error || 'Email tidak memenuhi syarat aktivasi.');
+        }
+
+        if (edgeRes.data) {
+          const d = edgeRes.data;
+          const rec: RegisteredEmailRecord = {
+            id: `reg-${d.member_id || sanitizeEmailId(cleanEmail)}`,
+            email: d.email || cleanEmail,
+            name: d.name || 'Anggota KKN',
+            position: d.position || 'Anggota',
+            division: d.division || 'Divisi Acara',
+            role: d.role || 'member',
+            systemRole: d.role === 'super_admin' ? 'super_admin' : d.role === 'admin' ? 'admin' : d.role === 'dpl' ? 'dpl' : 'user',
+            memberId: d.member_id,
+            status: 'pending_activation',
+            registeredBy: 'Administrator KKN',
+            registeredAt: new Date().toISOString(),
+          };
+          return rec;
+        }
+      }
+    } catch (checkErr: any) {
+      if (
+        checkErr?.message?.includes('belum didaftarkan') ||
+        checkErr?.message?.includes('belum dapat dikirim') ||
+        checkErr?.message?.includes('sudah aktif') ||
+        checkErr?.message?.includes('dinonaktifkan')
+      ) {
+        throw checkErr;
+      }
+    }
+
+    // 3. Fallback to local store for offline/demo if available
     const localList = getLocalRegisteredEmails();
     const localFound = localList.find(
       (item) => item.email.toLowerCase() === cleanEmail && !isFabricatedLegacyRecord(item)
@@ -549,25 +623,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return localFound.status === 'revoked' || localFound.status === 'disabled'
         ? null
         : localFound;
-    }
-
-    // 3. Fallback API check only if not in local allowlist
-    try {
-      const res = await fetch('/api/auth/check-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const rawRec = data.data || data.record;
-        if ((data.registered || data.found) && rawRec && !isFabricatedLegacyRecord(rawRec)) {
-          const rec = toAppRegisteredEmailRecord(rawRec);
-          if (rec.status !== 'revoked' && rec.status !== 'disabled') return rec;
-        }
-      }
-    } catch {
-      // Non-fatal
     }
 
     return null;

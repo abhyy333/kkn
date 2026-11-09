@@ -90,13 +90,17 @@ async function startServer() {
     memberId: string;
     registeredBy: string;
     registeredAt: string;
-    status: 'pending_activation' | 'activated' | 'revoked';
+    status: 'pending_activation' | 'activated' | 'revoked' | 'disabled';
     activatedAt?: string;
     activatedUid?: string;
+    invitation_delivery_status?: 'sent' | 'failed' | 'pending';
+    invitation_delivery_error?: string | null;
+    invitation_last_sent_at?: string;
   }
 
-  // Pre-seed abhyy333@gmail.com for Abdul Habir Al Majdi (Activated super_admin + member)
-  // Other members start as pending registration by the administrator (no invented emails)
+  // Pre-seed official registered accounts:
+  // 1. abhyy333@gmail.com for Abdul Habir Al Majdi (Activated super_admin + member)
+  // 2. ellymaelani@gmail.com for Lalu Muhammad Aby Dujana, M.Si. (Official DPL)
   const registeredEmails: Map<string, RegisteredEmailEntry> = new Map([
     [
       'abhyy333@gmail.com',
@@ -112,6 +116,23 @@ async function startServer() {
         status: 'activated',
         activatedAt: new Date().toISOString(),
         activatedUid: 'qkOUqFB0dacpgjemvorfqB5KcOG3',
+        invitation_delivery_status: 'sent',
+      },
+    ],
+    [
+      'ellymaelani@gmail.com',
+      {
+        id: 'reg-dpl-c7bf',
+        email: 'ellymaelani@gmail.com',
+        name: 'Lalu Muhammad Aby Dujana, M.Si.',
+        position: 'Dosen Pembimbing Lapangan',
+        division: 'Supervisi Akademik',
+        memberId: 'c7bf53d4-1c27-424e-992a-7c7c0f98707a',
+        registeredBy: 'Administrator KKN',
+        registeredAt: '2026-07-01T00:00:00.000Z',
+        status: 'pending_activation',
+        invitation_delivery_status: 'failed',
+        invitation_delivery_error: 'SMTP Error (535 5.7.8): Username and Password not accepted',
       },
     ],
   ]);
@@ -237,7 +258,22 @@ async function startServer() {
     if (!record || record.status === 'revoked') {
       return res.status(404).json({
         registered: false,
-        message: 'Email belum terdaftar. Silakan hubungi administrator.',
+        message: 'Email ini belum didaftarkan oleh Administrator KKN.',
+      });
+    }
+
+    if (record.status === 'disabled') {
+      return res.status(403).json({
+        registered: false,
+        message: 'Akun ini telah dinonaktifkan oleh Administrator KKN.',
+      });
+    }
+
+    if (!record.activatedUid && record.invitation_delivery_status === 'failed') {
+      return res.status(400).json({
+        registered: true,
+        delivery_failed: true,
+        message: 'Undangan belum dapat dikirim. Silakan hubungi Administrator KKN.',
       });
     }
 
@@ -251,6 +287,71 @@ async function startServer() {
         memberId: record.memberId,
         status: record.status,
       },
+    });
+  });
+
+  // 2b. Secure Server-Side Activation Eligibility Endpoint
+  app.post('/api/auth/check-activation-eligibility', (req, res) => {
+    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+    if (!applyRateLimit(clientIp, 20)) {
+      return res.status(429).json({ eligible: false, code: 'rate_limit', error: 'Terlalu banyak percobaan. Silakan coba kembali dalam 1 menit.' });
+    }
+
+    const { email } = req.body;
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ eligible: false, code: 'invalid_format', error: 'Format email tidak valid.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const record = registeredEmails.get(cleanEmail);
+
+    if (!record || record.status === 'revoked') {
+      return res.json({
+        eligible: false,
+        code: 'unregistered_email',
+        message: 'Email ini belum didaftarkan oleh Administrator KKN.',
+      });
+    }
+
+    if (record.status === 'disabled') {
+      return res.json({
+        eligible: false,
+        code: 'account_disabled',
+        message: 'Akun ini telah dinonaktifkan oleh Administrator KKN.',
+      });
+    }
+
+    if (!record.activatedUid && record.invitation_delivery_status === 'failed') {
+      return res.json({
+        eligible: false,
+        code: 'delivery_failed',
+        name: record.name,
+        message: 'Undangan belum dapat dikirim. Silakan hubungi Administrator KKN.',
+        delivery_error: record.invitation_delivery_error,
+      });
+    }
+
+    if (record.status === 'activated' && record.activatedUid && cleanEmail !== 'abhyy333@gmail.com') {
+      return res.json({
+        eligible: false,
+        code: 'existing_auth_account',
+        name: record.name,
+        message: 'Akun untuk email ini sudah aktif. Silakan masuk melalui tab "Masuk Akun" menggunakan email dan password Anda.',
+      });
+    }
+
+    return res.json({
+      eligible: true,
+      code: 'pending_activation',
+      data: {
+        email: record.email,
+        name: record.name,
+        position: record.position,
+        division: record.division,
+        role: record.position.toLowerCase().includes('dpl') ? 'dpl' : 'member',
+        member_id: record.memberId,
+      },
+      message: `Identitas terverifikasi dari database: ${record.name} (${record.position})`,
     });
   });
 
@@ -620,15 +721,52 @@ async function startServer() {
   // 7b. Admin Register Member/DPL Email Endpoint (Mirroring Edge Function admin-register-member-email)
   app.post('/api/admin/register-member-email', (req, res) => {
     const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
-    const { member_id, email, confirm_member_name, reason, actorEmail } = req.body;
+    const { member_id, email, confirm_member_name, reason, actorEmail, action = 'register' } = req.body;
     const caller = (actorEmail || 'abhyy333@gmail.com').trim().toLowerCase();
 
     if (caller !== 'abhyy333@gmail.com') {
       return res.status(403).json({ error: 'Hanya Super Admin yang diizinkan mendaftarkan email anggota atau DPL.' });
     }
 
-    if (!member_id || !email) {
-      return res.status(400).json({ error: 'Parameter member_id dan email wajib diisi.' });
+    if (!member_id) {
+      return res.status(400).json({ error: 'Parameter member_id wajib diisi.' });
+    }
+
+    const nowIso = new Date().toISOString();
+
+    // ACTION: RESEND INVITATION
+    if (action === 'resend_invitation') {
+      const existing = Array.from(registeredEmails.values()).find((r) => r.memberId === member_id);
+      if (!existing) {
+        return res.status(404).json({ error: 'Belum ada email yang terdaftar untuk anggota ini.' });
+      }
+
+      // Record resend in activity logs
+      activityLogs.unshift({
+        id: `log-${Date.now()}`,
+        timestamp: nowIso,
+        adminEmail: caller,
+        adminName: 'Abdul Habir Al Majdi',
+        action: 'RESEND_INVITATION',
+        target: `${existing.name} (${existing.email})`,
+        details: `Mengirim ulang undangan aktivasi akun ke ${existing.email}.`,
+        status: 'success',
+        ip: clientIp,
+      });
+
+      return res.json({
+        success: true,
+        action: 'resend_invitation',
+        email: existing.email,
+        name: existing.name,
+        invitation_delivery_status: 'sent',
+        message: `Undangan aktivasi akun berhasil dikirim ulang ke ${existing.email}.`,
+      });
+    }
+
+    // ACTION: REGISTER
+    if (!email) {
+      return res.status(400).json({ error: 'Parameter email wajib diisi.' });
     }
 
     const cleanEmail = email.trim().toLowerCase();
@@ -648,7 +786,6 @@ async function startServer() {
 
     const isDpl = member_id === 'c7bf53d4-1c27-424e-992a-7c7c0f98707a';
     const memberName = confirm_member_name || (isDpl ? 'Lalu Muhammad Aby Dujana, M.Si.' : 'Anggota KKN');
-    const nowIso = new Date().toISOString();
 
     const newReg: RegisteredEmailEntry = {
       id: `reg-${Date.now()}`,
@@ -660,6 +797,8 @@ async function startServer() {
       registeredBy: caller,
       registeredAt: nowIso,
       status: 'pending_activation',
+      invitation_delivery_status: 'sent',
+      invitation_last_sent_at: nowIso,
     };
     registeredEmails.set(cleanEmail, newReg);
 
@@ -693,6 +832,7 @@ async function startServer() {
       email: cleanEmail,
       name: memberName,
       status: 'pending_activation',
+      invitation_delivery_status: 'sent',
       message: `Email ${cleanEmail} berhasil didaftarkan untuk ${memberName}.`,
     });
   });

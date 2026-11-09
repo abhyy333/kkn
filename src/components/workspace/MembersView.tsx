@@ -30,7 +30,6 @@ import {
   Sparkles,
 } from 'lucide-react';
 
-import { DplManagementModal } from '../admin/DplManagementModal';
 import { OFFICIAL_DPL_MEMBER_ID, DPL_SUPERVISOR } from '../../data/mockData';
 import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 
@@ -60,7 +59,6 @@ export const MembersView: React.FC<MembersViewProps> = ({
 }) => {
   const { user, profile, isAdmin, isSuperAdmin } = useAuth();
   const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [isDplManageOpen, setIsDplManageOpen] = useState(false);
   const [dplRegStatus, setDplRegStatus] = useState<{ email: string; status: string } | null>(null);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [selectedMemberForDetail, setSelectedMemberForDetail] = useState<Member | null>(null);
@@ -357,13 +355,6 @@ export const MembersView: React.FC<MembersViewProps> = ({
         </div>
       </div>
 
-      {/* DPL Management Modal */}
-      <DplManagementModal
-        isOpen={isDplManageOpen}
-        onClose={() => setIsDplManageOpen(false)}
-        onRefreshData={fetchDplStatus}
-      />
-
       {/* Leadership & Advisory Banner Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* DPL Card */}
@@ -434,11 +425,17 @@ export const MembersView: React.FC<MembersViewProps> = ({
 
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setIsDplManageOpen(true)}
+                onClick={() => {
+                  if (onNavigateToAdmin) {
+                    onNavigateToAdmin();
+                  } else {
+                    window.location.hash = '#admin';
+                  }
+                }}
                 className="px-3 py-1 rounded-md bg-[#284230] text-white font-medium hover:bg-[#1E3224] transition-colors flex items-center gap-1 text-[11px] shadow-2xs"
               >
                 <Edit3 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{dplRegStatus ? 'Kelola DPL' : 'Daftarkan Email DPL'}</span>
+                <span>Kelola di Admin Console</span>
               </button>
             </div>
           </div>
