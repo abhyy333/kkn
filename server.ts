@@ -718,6 +718,49 @@ async function startServer() {
     return res.status(400).json({ error: 'Action harus bernilai "remove" atau "replace".' });
   });
 
+  // 7a. Get Project DPL Status Endpoint (Mirroring Edge Function get-project-dpl-status)
+  app.post('/api/dpl/status', (req, res) => {
+    const { actorEmail } = req.body || {};
+    const caller = (actorEmail || '').trim().toLowerCase();
+    const isSuperAdmin = caller === 'abhyy333@gmail.com';
+
+    const supervisor = {
+      id: 'c7bf53d4-1c27-424e-992a-7c7c0f98707a',
+      name: 'Lalu Muhammad Aby Dujana, M.Si.',
+      nip: '198910222024061001',
+      title: 'Dosen Pembimbing Lapangan',
+      position: 'Dosen Pembimbing Lapangan',
+      faculty: 'S1 Ilmu Lingkungan',
+      study_program: 'S1 Ilmu Lingkungan',
+      division: 'DPL / Supervisi',
+      category: 'supervisor',
+    };
+
+    const dplEmail = 'ellymaelani@gmail.com';
+    const maskedEmail = dplEmail.replace(/^(.{2})(.*)(@.*)$/, (_, a, b, c) => `${a}${'*'.repeat(Math.max(3, b.length))}${c}`);
+
+    const payload: any = {
+      success: true,
+      supervisor,
+      account: {
+        email_registered: true,
+        email: isSuperAdmin ? dplEmail : maskedEmail,
+        activation_status: 'activated',
+        is_active: true,
+        role: 'dpl',
+      },
+    };
+
+    if (isSuperAdmin) {
+      payload.admin_private = {
+        email: dplEmail,
+        registered_at: '2026-07-01T00:00:00.000Z',
+      };
+    }
+
+    return res.json(payload);
+  });
+
   // 7b. Admin Register Member/DPL Email Endpoint (Mirroring Edge Function admin-register-member-email)
   app.post('/api/admin/register-member-email', (req, res) => {
     const clientIp = req.ip || req.socket.remoteAddress || 'unknown';

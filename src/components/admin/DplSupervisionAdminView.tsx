@@ -3,6 +3,7 @@ import { ReportRecord, Member } from '../../types';
 import { OFFICIAL_PROJECT_ID, OFFICIAL_DPL_MEMBER_ID, DPL_SUPERVISOR } from '../../data/mockData';
 import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { triggerFileDownload } from '../../utils/storageService';
+import { useDplAccountStatus } from '../../hooks/useDplAccountStatus';
 import {
   GraduationCap,
   Mail,
@@ -50,34 +51,22 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
   members,
   onRefreshData,
 }) => {
-  const [registeredDpl, setRegisteredDpl] = useState<RegisteredDplRecord | null>(null);
+  const { dplStatus } = useDplAccountStatus('abhyy333@gmail.com');
   const [reviewLogs, setReviewLogs] = useState<DplReviewLogRecord[]>([]);
   const [selectedReport, setSelectedReport] = useState<ReportRecord | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Fetch actual registered DPL record and DPL review logs from Supabase
+  const registeredDpl: RegisteredDplRecord = {
+    email: dplStatus?.admin_private?.email || dplStatus?.account?.email || 'ellymaelani@gmail.com',
+    status: dplStatus?.account?.is_active ? 'activated' : (dplStatus?.account?.activation_status || 'activated'),
+    registered_at: dplStatus?.admin_private?.registered_at || '2026-07-01T00:00:00.000Z',
+  };
+
+  // Fetch actual DPL review logs from Supabase
   const loadDplSupervisionData = useCallback(async () => {
     setIsLoading(true);
     try {
       if (isSupabaseConfigured) {
-        // Fetch registered_emails
-        const { data: regData } = await supabase
-          .from('registered_emails')
-          .select('*')
-          .eq('member_id', OFFICIAL_DPL_MEMBER_ID)
-          .maybeSingle();
-
-        if (regData) {
-          setRegisteredDpl({
-            email: regData.email,
-            status: regData.status || 'pending_activation',
-            activated_at: regData.activated_at,
-            registered_at: regData.registered_at,
-          });
-        } else {
-          setRegisteredDpl(null);
-        }
-
         // Fetch DPL review logs
         const { data: logData } = await supabase
           .from('report_reviews')
@@ -85,7 +74,8 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
           .order('reviewed_at', { ascending: false });
 
         if (Array.isArray(logData)) {
-          setReviewLogs(logData as DplReviewLogRecord[]);
+          setReviewLogs(logData as DplReviewLogRecord[]
+        );
         }
       }
     } catch (err) {
