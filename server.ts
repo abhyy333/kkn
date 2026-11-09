@@ -355,6 +355,45 @@ async function startServer() {
     });
   });
 
+  // 2c. Check Member Email Registration Endpoint (Edge Function proxy for check-member-email-registration)
+  app.post('/api/auth/check-member-email-registration', (req, res) => {
+    const { email } = req.body || {};
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ eligible: false, code: 'invalid_format', error: 'Format email tidak valid.' });
+    }
+    const cleanEmail = email.trim().toLowerCase();
+    const record = registeredEmails.get(cleanEmail);
+
+    if (!record || record.status === 'revoked') {
+      return res.json({
+        eligible: false,
+        code: 'not_registered',
+        error: 'Email belum didaftarkan oleh Administrator KKN.',
+      });
+    }
+
+    if (record.status === 'activated' && record.activatedUid && cleanEmail !== 'abhyy333@gmail.com') {
+      return res.json({
+        eligible: false,
+        code: 'already_active',
+        error: 'Akun untuk email ini sudah aktif. Silakan masuk melalui tab "Masuk Akun" menggunakan email dan password Anda.',
+      });
+    }
+
+    return res.json({
+      eligible: true,
+      code: 'eligible',
+      data: {
+        email: record.email,
+        name: record.name,
+        position: record.position,
+        division: record.division,
+        role: record.position.toLowerCase().includes('dpl') ? 'dpl' : 'member',
+        member_id: record.memberId,
+      },
+    });
+  });
+
   // 3. Member Account Activation Endpoint (Links UID to member profile)
   app.post('/api/auth/activate', (req, res) => {
     const clientIp = req.ip || req.socket.remoteAddress || 'unknown';

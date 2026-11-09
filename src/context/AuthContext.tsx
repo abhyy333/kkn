@@ -1001,9 +1001,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthError(null);
     const cleanEmail = emailInput.trim().toLowerCase();
 
+    // WAJIB: Check email eligibility via check-member-email-registration Edge Function (with fallback to server proxy)
+    let eligibilityRes: any = null;
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase.functions.invoke('check-member-email-registration', {
+          body: { email: cleanEmail },
+        });
+        if (!error && data) {
+          eligibilityRes = data;
+        }
+      } catch {}
+    }
+
+    if (!eligibilityRes) {
+      try {
+        const res = await fetch('/api/auth/check-member-email-registration', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: cleanEmail }),
+        });
+        if (res.ok) {
+          eligibilityRes = await res.json();
+        }
+      } catch {}
+    }
+
+    if (eligibilityRes && !eligibilityRes.eligible) {
+      const code = eligibilityRes.code;
+      if (code === 'not_registered' || code === 'unregistered_email') {
+        throw new Error('Email belum didaftarkan oleh Administrator KKN.');
+      }
+      if (code === 'already_active' || code === 'existing_auth_account') {
+        throw new Error('Akun untuk email ini sudah aktif. Silakan masuk melalui tab Masuk Akun menggunakan email dan password Anda.');
+      }
+      if (code === 'confirmation_pending') {
+        throw new Error('Konfirmasi email masih tertunda. Silakan cek kotak masuk email Anda atau kirim ulang tautan verifikasi.');
+      }
+      if (code === 'account_reconciliation_required') {
+        throw new Error('Rekonsiliasi akun diperlukan. Silakan hubungi Administrator KKN.');
+      }
+      throw new Error(eligibilityRes.error || eligibilityRes.message || 'Email tidak memenuhi syarat aktivasi.');
+    }
+
     const record = await fetchAuthoritativeEmailRecord(cleanEmail);
     if (!record || record.status === 'revoked') {
-      throw new Error('Email belum terdaftar. Silakan hubungi administrator.');
+      throw new Error('Email belum didaftarkan oleh Administrator KKN.');
     }
 
     if (
