@@ -52,7 +52,7 @@ export interface SupabaseRegisteredEmailRow {
   position: string;
   division: string;
   role: 'ketua' | 'admin' | 'member' | 'dpl' | 'viewer';
-  systemRole: 'super_admin' | 'admin' | 'user';
+  systemRole: 'super_admin' | 'admin' | 'dpl' | 'user';
   memberId?: string;
   status: 'pending' | 'activated' | 'revoked' | 'disabled';
   registeredBy: string;
@@ -148,22 +148,26 @@ export function normalizeRegisteredEmailRow(
   )
     .trim()
     .toLowerCase();
-  const role: SupabaseRegisteredEmailRow['role'] =
-    rawRole === 'ketua' ||
-    rawRole === 'admin' ||
-    rawRole === 'member' ||
-    rawRole === 'dpl' ||
-    rawRole === 'viewer'
-      ? rawRole
-      : 'member';
-
   const rawSystemRole = String(row.system_role || row.systemRole || 'user')
     .trim()
     .toLowerCase();
-  const systemRole: SupabaseRegisteredEmailRow['systemRole'] =
-    email === 'abhyy333@gmail.com'
+
+  const isDpl = email === 'ellymaelani@gmail.com';
+  const role: SupabaseRegisteredEmailRow['role'] = isDpl
+    ? 'dpl'
+    : rawRole === 'ketua' ||
+      rawRole === 'admin' ||
+      rawRole === 'member' ||
+      rawRole === 'dpl' ||
+      rawRole === 'viewer'
+      ? rawRole
+      : 'member';
+
+  const systemRole: SupabaseRegisteredEmailRow['systemRole'] = isDpl
+    ? 'dpl'
+    : email === 'abhyy333@gmail.com'
       ? 'super_admin'
-      : rawSystemRole === 'super_admin' || rawSystemRole === 'admin'
+      : rawSystemRole === 'super_admin' || rawSystemRole === 'admin' || rawSystemRole === 'dpl'
         ? rawSystemRole
         : 'user';
 
@@ -174,25 +178,41 @@ export function normalizeRegisteredEmailRow(
       row.name ||
         row.full_name ||
         row.display_name ||
-        (email === 'abhyy333@gmail.com' ? 'Abdul Habir Al Majdi' : '')
+        (isDpl
+          ? 'Lalu Muhammad Aby Dujana, M.Si.'
+          : email === 'abhyy333@gmail.com'
+            ? 'Abdul Habir Al Majdi'
+            : '')
     ).trim(),
     position: String(
       row.position ||
         row.jabatan ||
-        (email === 'abhyy333@gmail.com' ? 'Divisi Acara 1' : 'Anggota KKN')
+        (isDpl
+          ? 'Dosen Pembimbing Lapangan'
+          : email === 'abhyy333@gmail.com'
+            ? 'Divisi Acara 1'
+            : 'Anggota KKN')
     ).trim(),
     division: String(
       row.division ||
         row.divisi ||
-        (email === 'abhyy333@gmail.com' ? 'Divisi Acara' : 'Umum')
+        (isDpl
+          ? 'DPL / Supervisi'
+          : email === 'abhyy333@gmail.com'
+            ? 'Divisi Acara'
+            : 'Umum')
     ).trim(),
-    role: email === 'abhyy333@gmail.com' ? 'member' : role,
-    systemRole,
+    role: isDpl ? 'dpl' : email === 'abhyy333@gmail.com' ? 'member' : role,
+    systemRole: isDpl ? 'dpl' : systemRole,
     memberId:
       row.member_id ||
       row.memberId ||
-      (email === 'abhyy333@gmail.com' ? 'm-4' : undefined),
-    status: email === 'abhyy333@gmail.com' ? 'activated' : status,
+      (isDpl
+        ? 'c7bf53d4-1c27-424e-992a-7c7c0f98707a'
+        : email === 'abhyy333@gmail.com'
+          ? 'm-4'
+          : undefined),
+    status: isDpl || email === 'abhyy333@gmail.com' ? 'activated' : status,
     registeredBy: String(
       row.registered_by || row.registeredBy || 'System Admin'
     ),

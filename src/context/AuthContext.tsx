@@ -719,6 +719,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return superAdminProfile;
         }
 
+        // Preserve role separation: DPL ellymaelani@gmail.com (Lalu Muhammad Aby Dujana, M.Si. - Dosen Pembimbing Lapangan + dpl)
+        if (cleanEmail === 'ellymaelani@gmail.com') {
+          const dplProfile: UserProfile = {
+            uid,
+            email: 'ellymaelani@gmail.com',
+            displayName: regRecord?.name || 'Lalu Muhammad Aby Dujana, M.Si.',
+            role: 'dpl',
+            systemRole: 'dpl',
+            position: regRecord?.position || 'Dosen Pembimbing Lapangan',
+            division: 'DPL / Supervisi',
+            memberId: regRecord?.memberId || 'c7bf53d4-1c27-424e-992a-7c7c0f98707a',
+            accountStatus: 'active',
+            acceptedAt: regRecord?.activatedAt || nowIso,
+            emailVerified: true,
+          };
+          saveCachedProfile(uid, dplProfile);
+          return dplProfile;
+        }
+
         // Reject if authenticated user is not authorized in database
         if (!regRecord) {
           return null;
