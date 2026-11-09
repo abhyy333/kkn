@@ -1,18 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Member } from '../../types';
 import { formatInternationalPhone, getWhatsAppUrl } from '../../utils/phone';
+import { FileUploader } from '../common/FileUploader';
 import {
   X,
   User,
   Phone,
-  Briefcase,
-  GraduationCap,
-  Image as ImageIcon,
   Plus,
   Trash2,
   Check,
   AlertCircle,
-  Shield,
 } from 'lucide-react';
 
 interface EditMemberModalProps {
@@ -50,6 +47,7 @@ export const EditMemberModal: React.FC<EditMemberModalProps> = ({
   const [phone, setPhone] = useState('');
   const [emergencyContact, setEmergencyContact] = useState('');
   const [avatar, setAvatar] = useState('');
+  const [avatarStoragePath, setAvatarStoragePath] = useState('');
   const [responsibilities, setResponsibilities] = useState<string[]>([]);
   const [newRespItem, setNewRespItem] = useState('');
 
@@ -67,6 +65,7 @@ export const EditMemberModal: React.FC<EditMemberModalProps> = ({
       setPhone(member.phone ? formatInternationalPhone(member.phone) : '');
       setEmergencyContact(member.emergencyContact || '');
       setAvatar(member.avatar || '');
+      setAvatarStoragePath(member.avatarStoragePath || '');
       setResponsibilities(member.responsibilities || []);
       setErrorMsg('');
     }
@@ -75,7 +74,6 @@ export const EditMemberModal: React.FC<EditMemberModalProps> = ({
   if (!isOpen || !member) return null;
 
   const handlePhoneChange = (val: string) => {
-    // Keep user's input responsive, format when typing
     setPhone(val);
   };
 
@@ -122,6 +120,7 @@ export const EditMemberModal: React.FC<EditMemberModalProps> = ({
         phone: formattedPhone,
         emergencyContact: emergencyContact.trim(),
         avatar: avatar.trim(),
+        avatarStoragePath: avatarStoragePath || undefined,
         responsibilities,
       };
 
@@ -153,7 +152,7 @@ export const EditMemberModal: React.FC<EditMemberModalProps> = ({
                 Edit Profil Anggota Tim KKN
               </h2>
               <p className="text-[11px] text-stone-500">
-                Perbarui informasi terverifikasi, nomor WhatsApp (+62), divisi, dan tanggung jawab operasional.
+                Perbarui foto profil, nomor WhatsApp (+62), divisi, dan tanggung jawab operasional.
               </p>
             </div>
           </div>
@@ -176,52 +175,43 @@ export const EditMemberModal: React.FC<EditMemberModalProps> = ({
           )}
 
           {/* Photo & Basic Details */}
-          <div className="flex flex-col sm:flex-row items-start gap-4 p-3.5 rounded-lg bg-[#FAF9F5] border border-stone-200/70">
-            <div className="flex flex-col items-center gap-2 shrink-0 mx-auto sm:mx-0">
-              <img
-                src={avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80'}
-                alt={name}
-                className="w-16 h-16 rounded-full object-cover border-2 border-[#4A6B53] shadow-xs"
-              />
-              <span className="text-[10px] text-stone-400">Foto Profil</span>
-            </div>
+          <div className="p-3.5 rounded-lg bg-[#FAF9F5] border border-stone-200/70 space-y-3">
+            <FileUploader
+              folder="members"
+              accept="image"
+              multiple={false}
+              label="Foto Profil Anggota (Unggah dari Perangkat / Kamera)"
+              helperText="JPG, PNG, WEBP hingga 10MB"
+              singleUrl={avatar}
+              singleStoragePath={avatarStoragePath}
+              onSingleUpload={(meta) => {
+                setAvatar(meta?.url || '');
+                setAvatarStoragePath(meta?.storagePath || '');
+              }}
+              compact
+            />
 
-            <div className="flex-1 w-full space-y-2">
-              <div>
-                <label className="text-stone-600 font-medium block mb-1">
-                  URL Foto Profil (Potret Rapi)
-                </label>
-                <div className="relative">
-                  <ImageIcon className="w-3.5 h-3.5 text-stone-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="url"
-                    value={avatar}
-                    onChange={(e) => setAvatar(e.target.value)}
-                    placeholder="https://images.unsplash.com/..."
-                    className="w-full pl-8 pr-2.5 py-1.5 rounded border border-[#D5D2C8] bg-white focus:outline-none focus:border-[#4A6B53]"
-                  />
-                </div>
-              </div>
-
-              {/* Preset selection pills */}
-              <div className="space-y-1">
-                <span className="text-[10px] text-stone-500 font-medium">Pilih Foto Cepat:</span>
-                <div className="flex flex-wrap gap-1">
-                  {PRESET_AVATARS.map((p, i) => (
-                    <button
-                      type="button"
-                      key={i}
-                      onClick={() => setAvatar(p.url)}
-                      className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
-                        avatar === p.url
-                          ? 'bg-[#4A6B53] text-white border-[#4A6B53]'
-                          : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-50'
-                      }`}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
+            {/* Preset selection pills */}
+            <div className="space-y-1 pt-1 border-t border-stone-200/60">
+              <span className="text-[10px] text-stone-500 font-medium">Atau Gunakan Avatar Standar:</span>
+              <div className="flex flex-wrap gap-1">
+                {PRESET_AVATARS.map((p, i) => (
+                  <button
+                    type="button"
+                    key={i}
+                    onClick={() => {
+                      setAvatar(p.url);
+                      setAvatarStoragePath('');
+                    }}
+                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                      avatar === p.url
+                        ? 'bg-[#4A6B53] text-white border-[#4A6B53]'
+                        : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-50'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -401,7 +391,7 @@ export const EditMemberModal: React.FC<EditMemberModalProps> = ({
               ) : (
                 <>
                   <Check className="w-3.5 h-3.5" />
-                  <span>Simpan Perubahan ke Firestore</span>
+                  <span>Simpan Perubahan Profil</span>
                 </>
               )}
             </button>

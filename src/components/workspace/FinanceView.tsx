@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import { Transaction, calculateFinanceSummary, formatRupiah } from '../../utils/finance';
+import { UploadedFileMetadata } from '../../types';
+import { FileUploader } from '../common/FileUploader';
+import { triggerFileDownload } from '../../utils/storageService';
 import {
-  Wallet,
   ArrowDownLeft,
   ArrowUpRight,
   Plus,
   Search,
-  Filter,
   Receipt,
-  FileSpreadsheet,
+  ExternalLink,
 } from 'lucide-react';
 
 interface FinanceViewProps {
@@ -31,6 +32,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   const [description, setDescription] = useState('');
   const [source, setSource] = useState('Kas Posko KKN');
   const [recordedBy, setRecordedBy] = useState('Tsaniatul Amni Alwan (Bendahara)');
+  const [uploadedReceipt, setUploadedReceipt] = useState<UploadedFileMetadata | null>(null);
 
   const summary = calculateFinanceSummary(transactions);
 
@@ -53,15 +55,19 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
       type: txType,
       category,
       amount: Number(amount),
-      description,
+      description: description.trim(),
       source: txType === 'income' ? source : undefined,
       recordedBy,
+      receiptUrl: uploadedReceipt?.url,
+      receiptStoragePath: uploadedReceipt?.storagePath,
+      receiptFileName: uploadedReceipt?.name,
     };
 
     onAddTransaction(newTx);
     setIsModalOpen(false);
     setDescription('');
     setAmount(250000);
+    setUploadedReceipt(null);
   };
 
   return (
@@ -78,7 +84,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
             </h1>
           </div>
           <p className="text-xs text-stone-500">
-            Pencatatan akuntansi transparan dana operasional mandiri, stimulan kas desa, sponsorship, dan belanja program.
+            Pencatatan akuntansi transparan dana operasional mandiri, stimulan kas desa, sponsorship, belanja program, dan bukti nota digital.
           </p>
         </div>
 
@@ -207,6 +213,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                   <th className="py-2.5 px-4 font-medium">Tanggal</th>
                   <th className="py-2.5 px-4 font-medium">Keterangan</th>
                   <th className="py-2.5 px-4 font-medium">Kategori</th>
+                  <th className="py-2.5 px-4 font-medium">Bukti Nota</th>
                   <th className="py-2.5 px-4 font-medium">Dicatat Oleh</th>
                   <th className="py-2.5 px-4 font-medium text-right">Nominal</th>
                 </tr>
@@ -226,6 +233,26 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                       )}
                     </td>
                     <td className="py-3 px-4 text-stone-600 whitespace-nowrap">{t.category}</td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      {t.receiptUrl ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            triggerFileDownload(
+                              t.receiptUrl,
+                              t.receiptFileName || `Nota-${t.id}`
+                            )
+                          }
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#EBF1ED] text-[#284230] border border-[#CCDCD0] text-[10px] font-medium hover:underline"
+                        >
+                          <Receipt className="w-3 h-3" />
+                          <span>Lihat Nota</span>
+                          <ExternalLink className="w-2.5 h-2.5" />
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-stone-400">Tercatat</span>
+                      )}
+                    </td>
                     <td className="py-3 px-4 text-stone-500 text-[11px] whitespace-nowrap">
                       {t.recordedBy}
                     </td>
@@ -248,7 +275,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
       {/* Add Transaction Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-stone-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg border border-[#E8E6DF] shadow-xl max-w-md w-full p-6 space-y-4">
+          <div className="bg-white rounded-lg border border-[#E8E6DF] shadow-xl max-w-md w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-stone-100">
               <h3 className="font-serif text-lg font-semibold text-stone-900">
                 Catat Transaksi Buku Kas
@@ -343,7 +370,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                   required
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Contoh: Beli cat & pernis plang petunjuk Curug Silangit"
+                  placeholder="Contoh: Beli cat & pernis plang petunjuk jalan dusun"
                   className="w-full px-3 py-1.5 rounded-md border border-[#D5D2C8] focus:outline-none focus:border-[#4A6B53]"
                 />
               </div>
@@ -358,6 +385,17 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                   className="w-full px-3 py-1.5 rounded-md border border-[#D5D2C8] focus:outline-none focus:border-[#4A6B53]"
                 />
               </div>
+
+              <FileUploader
+                folder="finance"
+                accept="any"
+                multiple={false}
+                label="Bukti Nota / Kwitansi / Bukti Transfer (Foto atau PDF)"
+                helperText="Ambil foto struk belanja dari kamera HP atau unggah PDF bukti transfer"
+                files={uploadedReceipt ? [uploadedReceipt] : []}
+                onChange={(files) => setUploadedReceipt(files[0] || null)}
+                compact
+              />
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-stone-100">
                 <button
@@ -381,3 +419,4 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
     </div>
   );
 };
+

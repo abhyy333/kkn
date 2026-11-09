@@ -7,6 +7,8 @@ export interface Transaction {
   description: string;
   source?: string;
   receiptUrl?: string;
+  receiptStoragePath?: string;
+  receiptFileName?: string;
   programId?: string;
   recordedBy: string;
 }

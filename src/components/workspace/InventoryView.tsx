@@ -1,13 +1,11 @@
 import React, { useState } from 'react';
 import { InventoryRecord } from '../../types';
+import { FileUploader } from '../common/FileUploader';
 import {
-  Package,
   Plus,
   Search,
   CheckCircle2,
   AlertTriangle,
-  MapPin,
-  User,
 } from 'lucide-react';
 
 interface InventoryViewProps {
@@ -32,6 +30,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [ownership, setOwnership] = useState<InventoryRecord['ownership']>('Milik Unit');
   const [storageLocation, setStorageLocation] = useState('Ruang Tengah Posko');
   const [pic, setPic] = useState('Dini Aminarti');
+  const [photoUrl, setPhotoUrl] = useState('');
+  const [photoStoragePath, setPhotoStoragePath] = useState('');
 
   const filtered = inventory.filter((item) => {
     const matchesCategory = filterCategory === 'all' || item.category === filterCategory;
@@ -48,7 +48,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
     const newItem: InventoryRecord = {
       id: `inv-${Date.now()}`,
-      name,
+      name: name.trim(),
       category,
       quantity: Number(quantity),
       unit,
@@ -57,11 +57,15 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       storageLocation,
       pic,
       lastChecked: new Date().toISOString().slice(0, 10),
+      photoUrl: photoUrl || undefined,
+      photoStoragePath: photoStoragePath || undefined,
     };
 
     onAddItem(newItem);
     setIsModalOpen(false);
     setName('');
+    setPhotoUrl('');
+    setPhotoStoragePath('');
   };
 
   return (
@@ -78,7 +82,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             </h1>
           </div>
           <p className="text-xs text-stone-500">
-            Daftar inventaris aset posko KKN, barang pinjaman desa, peralatan P3K, sound system, dan status kondisi alat.
+            Daftar inventaris aset posko KKN, barang pinjaman desa, peralatan P3K, sound system, foto fisik alat, dan status kondisi.
           </p>
         </div>
 
@@ -145,7 +149,18 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             <tbody className="divide-y divide-stone-100">
               {filtered.map((item) => (
                 <tr key={item.id} className="hover:bg-stone-50 transition-colors">
-                  <td className="py-3 px-4 font-medium text-stone-900">{item.name}</td>
+                  <td className="py-3 px-4 font-medium text-stone-900">
+                    <div className="flex items-center gap-2.5">
+                      {item.photoUrl && (
+                        <img
+                          src={item.photoUrl}
+                          alt={item.name}
+                          className="w-9 h-9 rounded-md object-cover border border-stone-200 shrink-0"
+                        />
+                      )}
+                      <span>{item.name}</span>
+                    </div>
+                  </td>
                   <td className="py-3 px-4 text-stone-600">{item.category}</td>
                   <td className="py-3 px-4 font-semibold text-stone-800">
                     {item.quantity} {item.unit}
@@ -184,7 +199,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       {/* Add Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-stone-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg border border-[#E8E6DF] shadow-xl max-w-md w-full p-6 space-y-4">
+          <div className="bg-white rounded-lg border border-[#E8E6DF] shadow-xl max-w-md w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-stone-100">
               <h3 className="font-serif text-lg font-semibold text-stone-900">
                 Tambah Barang Logistik
@@ -199,7 +214,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
             <form onSubmit={handleCreate} className="space-y-4 text-xs">
               <div className="space-y-1">
-                <label className="font-medium text-stone-700">Nama Barang</label>
+                <label className="font-medium text-stone-700">Nama Barang *</label>
                 <input
                   type="text"
                   required
@@ -299,6 +314,21 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 </div>
               </div>
 
+              <FileUploader
+                folder="inventory"
+                accept="image"
+                multiple={false}
+                label="Foto Fisik Barang Logistik (Kamera / Galeri)"
+                helperText="Ambil foto kondisi fisik barang (Opsional)"
+                singleUrl={photoUrl}
+                singleStoragePath={photoStoragePath}
+                onSingleUpload={(meta) => {
+                  setPhotoUrl(meta?.url || '');
+                  setPhotoStoragePath(meta?.storagePath || '');
+                }}
+                compact
+              />
+
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-stone-100">
                 <button
                   type="button"
@@ -321,3 +351,4 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     </div>
   );
 };
+

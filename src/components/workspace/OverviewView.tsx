@@ -1,30 +1,30 @@
 import React from 'react';
 import {
-  WorkProgram,
-  TaskItem,
+  Calendar,
+  Clock,
+  MapPin,
+  ArrowRight,
+  Plus,
+  CheckCircle2,
+  Circle,
+} from 'lucide-react';
+import {
+  DecisionLogRecord,
   MeetingItem,
+  TaskItem,
+  TransactionRecord,
+  WorkProgram,
   WorkspaceModuleId,
 } from '../../types';
-import { Transaction, formatRupiah } from '../../utils/finance';
-import {
-  Calendar,
-  Sparkles,
-  CheckCircle2,
-  Clock,
-  ArrowRight,
-  TrendingUp,
-  MapPin,
-  ChevronRight,
-  CheckSquare,
-} from 'lucide-react';
 
 interface OverviewViewProps {
   programs: WorkProgram[];
   tasks: TaskItem[];
   meetings: MeetingItem[];
-  transactions: Transaction[];
-  onNavigate: (module: WorkspaceModuleId) => void;
-  onToggleTask: (taskId: string) => void;
+  transactions: TransactionRecord[];
+  decisions: DecisionLogRecord[];
+  onNavigate: (page: WorkspaceModuleId) => void;
+  onToggleTask?: (taskId: string) => void;
 }
 
 export const OverviewView: React.FC<OverviewViewProps> = ({
@@ -32,19 +32,20 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   tasks,
   meetings,
   transactions,
+  decisions,
   onNavigate,
   onToggleTask,
 }) => {
-  // Aggregate stats
-  const totalPrograms = programs.length;
-  const completedPrograms = programs.filter((p) => p.status === 'completed').length;
-  const avgProgress = Math.round(
-    programs.reduce((acc, p) => acc + p.progressPercent, 0) / (totalPrograms || 1)
-  );
+  const upcomingMeetings = meetings.filter((m) => m.status === 'upcoming');
+  const nextMeeting = upcomingMeetings[0] || meetings[0];
 
-  const doneTasks = tasks.filter((t) => t.status === 'done').length;
+  const completedTasks = tasks.filter((t) => t.status === 'done').length;
+  const inProgressTasks = tasks.filter((t) => t.status === 'in_progress').length;
   const urgentTasks = tasks.filter((t) => t.priority === 'urgent' && t.status !== 'done');
-  const pendingTasks = tasks.filter((t) => t.status !== 'done').slice(0, 5);
+
+  const avgProgramProgress = Math.round(
+    programs.reduce((acc, p) => acc + p.progressPercent, 0) / (programs.length || 1)
+  );
 
   const totalIncome = transactions
     .filter((t) => t.type === 'income')
@@ -54,293 +55,331 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
     .reduce((sum, t) => sum + t.amount, 0);
   const currentBalance = totalIncome - totalExpense;
 
-  const upcomingMeetings = meetings.filter((m) => m.status === 'upcoming');
-
   return (
-    <div className="space-y-8 max-w-6xl mx-auto pb-12">
-      {/* Notion-style Page Header with Cover & Icon */}
-      <div className="space-y-4">
-        {/* Subtle Decorative Cover Bar */}
-        <div className="h-32 sm:h-40 w-full rounded-xl bg-gradient-to-r from-[#2F4735] via-[#4A6B53] to-[#5C7E65] relative overflow-hidden shadow-xs">
-          <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]" />
-          <div className="absolute bottom-3 right-4 text-white/80 text-xs font-mono tracking-wider">
-            KKN PRINGGASELA SELATAN · LOMBOK TIMUR
-          </div>
+    <div className="space-y-8 pb-12 max-w-6xl mx-auto">
+      {/* Compact Page Introduction */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-[#E8E6DF]">
+        <div className="space-y-1">
+          <h1 className="text-lg font-semibold text-stone-900 tracking-tight">
+            Overview
+          </h1>
+          <p className="text-xs text-stone-500">
+            Ringkasan operasional KKN Desa Pringgasela Selatan, agenda rapat, tugas prioritas, dan realisasi program kerja.
+          </p>
         </div>
 
-        {/* Title & Notion Icon */}
-        <div className="px-1 sm:px-2 pt-1 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2.5">
-              <span className="text-3xl" role="img" aria-label="Sprout">
-                🌱
-              </span>
-              <h1 className="font-serif text-2xl sm:text-3xl font-medium text-stone-900 tracking-tight">
-                KKN SPACE — Posko Desa Pringgasela Selatan
-              </h1>
-            </div>
-            <p className="text-sm text-stone-600 max-w-2xl font-normal">
-              Ruang kerja kolaboratif KKN Pringgasela Selatan di Desa Pringgasela Selatan, Kec. Pringgasela, Kab. Lombok Timur, NTB.
-              Sinkronisasi sentra tenun tradisional, program kerja lapangan, keuangan, logistik, dan transparansi warga.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 text-xs text-stone-500">
-            <MapPin className="w-4 h-4 text-[#4A6B53]" />
-            <span>Ketinggian ±450 mdpl · Kaki Gunung Rinjani</span>
-          </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => onNavigate('meetings')}
+            className="px-3 py-1.5 rounded-md border border-[#E8E6DF] bg-white hover:bg-stone-50 text-stone-700 text-xs font-medium transition-colors"
+          >
+            Jadwal Rapat
+          </button>
+          <button
+            onClick={() => onNavigate('tasks')}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#4A6B53] hover:bg-[#3d5944] text-white text-xs font-medium transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Buat Tugas</span>
+          </button>
         </div>
       </div>
 
-      {/* Top Metric Cards - Notion Clean Aesthetic (No candy pills) */}
+      {/* Clean, Consistently Sized Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Program Capaian */}
-        <div
+        <button
           onClick={() => onNavigate('programs')}
-          className="p-4 rounded-lg bg-white border border-[#E8E6DF] hover:border-[#CCDCD0] transition-colors cursor-pointer group shadow-2xs"
+          className="p-4 rounded-lg bg-white border border-[#E8E6DF] hover:border-stone-300 transition-colors text-left flex flex-col justify-between min-h-[104px]"
         >
-          <div className="flex items-center justify-between text-xs text-stone-500 mb-2">
-            <span>Program Kerja</span>
-            <Sparkles className="w-4 h-4 text-[#4A6B53]" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-semibold text-stone-900">{avgProgress}%</span>
-            <span className="text-xs text-stone-500">rata-rata progres</span>
-          </div>
-          <div className="mt-3 flex items-center justify-between text-xs text-stone-600 pt-2 border-t border-stone-100">
-            <span>{completedPrograms} selesai dari {totalPrograms} program</span>
-            <ChevronRight className="w-3.5 h-3.5 text-stone-400 group-hover:text-stone-700" />
-          </div>
-        </div>
-
-        {/* Card 2: Keuangan Kas */}
-        <div
-          onClick={() => onNavigate('finance')}
-          className="p-4 rounded-lg bg-white border border-[#E8E6DF] hover:border-[#CCDCD0] transition-colors cursor-pointer group shadow-2xs"
-        >
-          <div className="flex items-center justify-between text-xs text-stone-500 mb-2">
-            <span>Saldo Kas Posko</span>
-            <TrendingUp className="w-4 h-4 text-[#4A6B53]" />
-          </div>
-          <div className="text-2xl font-semibold text-stone-900 truncate">
-            {formatRupiah(currentBalance)}
-          </div>
-          <div className="mt-3 flex items-center justify-between text-xs text-stone-600 pt-2 border-t border-stone-100">
-            <span>Total Masuk: {formatRupiah(totalIncome)}</span>
-            <ChevronRight className="w-3.5 h-3.5 text-stone-400 group-hover:text-stone-700" />
-          </div>
-        </div>
-
-        {/* Card 3: Tasks Checklist */}
-        <div
-          onClick={() => onNavigate('tasks')}
-          className="p-4 rounded-lg bg-white border border-[#E8E6DF] hover:border-[#CCDCD0] transition-colors cursor-pointer group shadow-2xs"
-        >
-          <div className="flex items-center justify-between text-xs text-stone-500 mb-2">
-            <span>Tugas & Target</span>
-            <CheckCircle2 className="w-4 h-4 text-[#4A6B53]" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-semibold text-stone-900">{doneTasks}</span>
-            <span className="text-xs text-stone-500">/ {tasks.length} tugas selesai</span>
-          </div>
-          <div className="mt-3 flex items-center justify-between text-xs text-stone-600 pt-2 border-t border-stone-100">
-            <span className={urgentTasks.length > 0 ? 'text-amber-800 font-medium' : ''}>
-              {urgentTasks.length} tugas mendesak
+          <span className="text-xs text-stone-500 font-normal">Realisasi Program Kerja</span>
+          <div className="mt-2 flex items-baseline justify-between gap-2">
+            <span className="text-2xl font-semibold text-stone-900 tabular-nums">
+              {avgProgramProgress}%
             </span>
-            <ChevronRight className="w-3.5 h-3.5 text-stone-400 group-hover:text-stone-700" />
+            <span className="text-[11px] text-stone-500">
+              {programs.length} program
+            </span>
           </div>
-        </div>
+        </button>
 
-        {/* Card 4: Countdown Hari */}
-        <div className="p-4 rounded-lg bg-white border border-[#E8E6DF] shadow-2xs">
-          <div className="flex items-center justify-between text-xs text-stone-500 mb-2">
-            <span>Masa Pengabdian</span>
-            <Clock className="w-4 h-4 text-stone-500" />
+        <button
+          onClick={() => onNavigate('tasks')}
+          className="p-4 rounded-lg bg-white border border-[#E8E6DF] hover:border-stone-300 transition-colors text-left flex flex-col justify-between min-h-[104px]"
+        >
+          <span className="text-xs text-stone-500 font-normal">Penyelesaian Tugas</span>
+          <div className="mt-2 flex items-baseline justify-between gap-2">
+            <span className="text-2xl font-semibold text-stone-900 tabular-nums">
+              {completedTasks}/{tasks.length}
+            </span>
+            <span className="text-[11px] text-stone-500">
+              {inProgressTasks} berjalan
+            </span>
           </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-semibold text-stone-900">Hari ke-18</span>
-            <span className="text-xs text-stone-500">dari 45 hari</span>
+        </button>
+
+        <button
+          onClick={() => onNavigate('finance')}
+          className="p-4 rounded-lg bg-white border border-[#E8E6DF] hover:border-stone-300 transition-colors text-left flex flex-col justify-between min-h-[104px]"
+        >
+          <span className="text-xs text-stone-500 font-normal">Saldo Kas Operasional</span>
+          <div className="mt-2 flex items-baseline justify-between gap-2">
+            <span className="text-xl font-semibold text-stone-900 tabular-nums">
+              Rp {(currentBalance / 1000000).toFixed(1)} jt
+            </span>
+            <span className="text-[11px] text-stone-500">
+              {transactions.length} transaksi
+            </span>
           </div>
-          <div className="mt-3 flex items-center justify-between text-xs text-stone-600 pt-2 border-t border-stone-100">
-            <span>Sisa 27 hari pengabdian</span>
-            <span className="text-[11px] text-[#4A6B53] font-medium">40% waktu</span>
+        </button>
+
+        <button
+          onClick={() => onNavigate('decisions')}
+          className="p-4 rounded-lg bg-white border border-[#E8E6DF] hover:border-stone-300 transition-colors text-left flex flex-col justify-between min-h-[104px]"
+        >
+          <span className="text-xs text-stone-500 font-normal">Keputusan & Rapat</span>
+          <div className="mt-2 flex items-baseline justify-between gap-2">
+            <span className="text-2xl font-semibold text-stone-900 tabular-nums">
+              {decisions.length}
+            </span>
+            <span className="text-[11px] text-stone-500">
+              {meetings.length} rapat
+            </span>
           </div>
-        </div>
+        </button>
       </div>
 
-      {/* Main Grid: Programs Overview & Action Center */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column (2 cols): Program Kerja Unggulan */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="p-5 rounded-lg bg-white border border-[#E8E6DF] shadow-2xs space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-stone-100">
+      {/* Main Content Grid: Next Meeting & Priority Tasks */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Next Scheduled Meeting */}
+        <div className="p-5 rounded-lg bg-white border border-[#E8E6DF] flex flex-col justify-between space-y-4">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
               <div>
-                <h2 className="font-serif text-base font-semibold text-stone-900">
-                  Status Program Kerja Unggulan
-                </h2>
-                <p className="text-xs text-stone-500">
-                  Kemajuan 5 program kerja utama berbasis kebutuhan masyarakat desa
-                </p>
-              </div>
-              <button
-                onClick={() => onNavigate('programs')}
-                className="text-xs font-medium text-[#4A6B53] hover:text-[#385240] flex items-center gap-1 transition-colors"
-              >
-                <span>Lihat Semua</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              {programs.slice(0, 4).map((prog) => (
-                <div
-                  key={prog.id}
-                  onClick={() => onNavigate('programs')}
-                  className="p-3 rounded-md hover:bg-[#FAF9F5] transition-colors border border-transparent hover:border-[#E8E6DF] cursor-pointer group"
-                >
-                  <div className="flex items-start justify-between gap-3 mb-1.5">
-                    <div className="space-y-0.5">
-                      <div className="flex items-center gap-2 text-[11px] text-stone-500">
-                        <span className="font-mono text-stone-600">{prog.code}</span>
-                        <span>·</span>
-                        <span>{prog.division}</span>
-                        <span>·</span>
-                        <span>PIC: {prog.pic.split(' ')[0]}</span>
-                      </div>
-                      <h3 className="text-sm font-medium text-stone-900 group-hover:text-[#4A6B53] transition-colors">
-                        {prog.title}
-                      </h3>
-                    </div>
-                    <span className="text-xs font-semibold text-stone-700 shrink-0">
-                      {prog.progressPercent}%
-                    </span>
-                  </div>
-
-                  {/* Progress bar */}
-                  <div className="w-full h-1.5 bg-[#EDEAE3] rounded-full overflow-hidden mt-2">
-                    <div
-                      className="h-full bg-[#4A6B53] rounded-full transition-all duration-300"
-                      style={{ width: `${prog.progressPercent}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Agenda & Meetings Box */}
-          <div className="p-5 rounded-lg bg-white border border-[#E8E6DF] shadow-2xs space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-              <div>
-                <h2 className="font-serif text-base font-semibold text-stone-900">
-                  Agenda & Pertemuan Terdekat
-                </h2>
-                <p className="text-xs text-stone-500">
-                  Jadwal rapat evaluasi posko, koordinasi balai desa, dan kunjungan DPL
-                </p>
+                <h2 className="text-sm font-semibold text-stone-900">Agenda Rapat Terdekat</h2>
+                <p className="text-xs text-stone-500">Jadwal koordinasi anggota dan evaluasi</p>
               </div>
               <button
                 onClick={() => onNavigate('meetings')}
-                className="text-xs font-medium text-[#4A6B53] hover:text-[#385240] flex items-center gap-1 transition-colors"
+                className="text-xs text-[#4A6B53] hover:underline font-medium inline-flex items-center gap-1"
               >
-                <span>Buka Agenda</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                <span>Semua rapat</span>
+                <ArrowRight className="w-3 h-3" />
               </button>
             </div>
 
-            <div className="space-y-3">
-              {meetings.slice(0, 3).map((meeting) => (
-                <div
-                  key={meeting.id}
-                  onClick={() => onNavigate('meetings')}
-                  className="p-3 rounded-md border border-[#EBE8E1] hover:border-[#CCDCD0] bg-[#FAF9F5] transition-colors cursor-pointer space-y-1.5"
-                >
-                  <div className="flex items-center justify-between text-xs text-stone-500">
-                    <span className="font-medium text-[#4A6B53]">{meeting.type}</span>
-                    <span className="flex items-center gap-1 text-stone-600">
-                      <Calendar className="w-3.5 h-3.5 text-stone-400" />
-                      {meeting.date} · {meeting.time}
-                    </span>
-                  </div>
-                  <div className="text-sm font-medium text-stone-900">{meeting.title}</div>
-                  <p className="text-xs text-stone-600 line-clamp-1">{meeting.notesSummary}</p>
+            {nextMeeting ? (
+              <div className="space-y-3">
+                <div>
+                  <div className="text-xs text-stone-500">{nextMeeting.type}</div>
+                  <h3 className="text-sm font-semibold text-stone-900 mt-0.5">
+                    {nextMeeting.title}
+                  </h3>
                 </div>
-              ))}
-            </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-stone-600 pt-1">
+                  <div className="flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                    <span>{nextMeeting.date}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                    <span>{nextMeeting.time}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                    <span className="truncate">{nextMeeting.location}</span>
+                  </div>
+                </div>
+
+                {nextMeeting.agenda && nextMeeting.agenda.length > 0 && (
+                  <div className="pt-2 border-t border-stone-100 space-y-1.5">
+                    <div className="text-[11px] font-medium text-stone-400">Pokok Bahasan</div>
+                    <ul className="space-y-1">
+                      {nextMeeting.agenda.slice(0, 3).map((item, idx) => (
+                        <li key={idx} className="text-xs text-stone-600 flex items-start gap-2">
+                          <span className="text-stone-400 font-mono text-[11px]">{idx + 1}.</span>
+                          <span className="line-clamp-1">{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-stone-500 py-6 text-center">
+                Belum ada rapat terjadwal dalam waktu dekat.
+              </p>
+            )}
+          </div>
+
+          <div className="pt-3 border-t border-stone-100 flex items-center justify-between text-xs text-stone-500">
+            <span>{upcomingMeetings.length} rapat akan datang</span>
+            <button
+              onClick={() => onNavigate('meetings')}
+              className="text-stone-700 hover:text-stone-900 font-medium"
+            >
+              Buka Notulensi →
+            </button>
           </div>
         </div>
 
-        {/* Right Column (1 col): Tasks Focus & Quick Links */}
-        <div className="space-y-6">
-          {/* Action Tasks Card */}
-          <div className="p-5 rounded-lg bg-white border border-[#E8E6DF] shadow-2xs space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-              <div className="flex items-center gap-2">
-                <CheckSquare className="w-4 h-4 text-[#4A6B53]" />
-                <h2 className="font-serif text-base font-semibold text-stone-900">
-                  Tugas Prioritas
-                </h2>
+        {/* Priority & Urgent Tasks */}
+        <div className="p-5 rounded-lg bg-white border border-[#E8E6DF] flex flex-col justify-between space-y-4">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+              <div>
+                <h2 className="text-sm font-semibold text-stone-900">Tugas Prioritas</h2>
+                <p className="text-xs text-stone-500">Tindak lanjut operasional yang memerlukan perhatian</p>
               </div>
               <button
                 onClick={() => onNavigate('tasks')}
-                className="text-xs text-[#4A6B53] font-medium hover:underline"
+                className="text-xs text-[#4A6B53] hover:underline font-medium inline-flex items-center gap-1"
               >
-                Lihat Board
+                <span>Semua tugas</span>
+                <ArrowRight className="w-3 h-3" />
               </button>
             </div>
 
-            <div className="space-y-2.5">
-              {pendingTasks.map((t) => (
-                <div
-                  key={t.id}
-                  className="flex items-start gap-2.5 p-2 rounded-md hover:bg-stone-50 text-xs transition-colors group"
-                >
-                  <input
-                    type="checkbox"
-                    checked={t.status === 'done'}
-                    onChange={() => onToggleTask(t.id)}
-                    className="mt-0.5 rounded border-stone-300 text-[#4A6B53] focus:ring-[#4A6B53] cursor-pointer"
-                    id={`overview-task-${t.id}`}
-                  />
-                  <label
-                    htmlFor={`overview-task-${t.id}`}
-                    className="flex-1 cursor-pointer min-w-0"
+            <div className="divide-y divide-stone-100">
+              {(urgentTasks.length > 0 ? urgentTasks : tasks.filter((t) => t.status !== 'done'))
+                .slice(0, 4)
+                .map((task) => (
+                  <div
+                    key={task.id}
+                    className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3 group"
                   >
-                    <div className="text-stone-800 font-medium group-hover:text-stone-900 line-clamp-2">
-                      {t.title}
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <button
+                        type="button"
+                        onClick={() => onToggleTask?.(task.id)}
+                        className="mt-0.5 text-stone-400 hover:text-[#4A6B53] transition-colors shrink-0"
+                        title="Tandai selesai"
+                      >
+                        {task.status === 'done' ? (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-[#4A6B53]" />
+                        ) : (
+                          <Circle className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                      <div
+                        onClick={() => onNavigate('tasks')}
+                        className="min-w-0 cursor-pointer"
+                      >
+                        <div className="text-xs font-medium text-stone-900 group-hover:text-[#4A6B53] transition-colors truncate">
+                          {task.title}
+                        </div>
+                        <div className="text-[11px] text-stone-500 mt-0.5 truncate">
+                          {task.assignee} · {task.division}
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 mt-1 text-[11px] text-stone-500">
-                      <span>{t.assignee.split(' ')[0]}</span>
-                      <span>·</span>
-                      <span className={t.priority === 'urgent' ? 'text-amber-800 font-medium' : ''}>
-                        {t.priority}
-                      </span>
+                    <div className="text-right shrink-0">
+                      <span className="text-[11px] text-stone-400 font-mono">{task.dueDate}</span>
                     </div>
-                  </label>
+                  </div>
+                ))}
+            </div>
+          </div>
+
+          <div className="pt-3 border-t border-stone-100 flex items-center justify-between text-xs text-stone-500">
+            <span>{urgentTasks.length} tugas berprioritas mendesak</span>
+            <button
+              onClick={() => onNavigate('tasks')}
+              className="text-stone-700 hover:text-stone-900 font-medium"
+            >
+              Kelola Tugas →
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Secondary Row: Work Programs & Recent Decisions */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Work Programs List */}
+        <div className="p-5 rounded-lg bg-white border border-[#E8E6DF] space-y-4">
+          <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+            <div>
+              <h2 className="text-sm font-semibold text-stone-900">Progres Program Kerja</h2>
+              <p className="text-xs text-stone-500">Status pelaksanaan program utama dan pendamping</p>
+            </div>
+            <button
+              onClick={() => onNavigate('programs')}
+              className="text-xs text-[#4A6B53] hover:underline font-medium inline-flex items-center gap-1"
+            >
+              <span>Detail</span>
+              <ArrowRight className="w-3 h-3" />
+            </button>
+          </div>
+
+          <div className="divide-y divide-stone-100">
+            {programs.slice(0, 5).map((program) => (
+              <div
+                key={program.id}
+                onClick={() => onNavigate('programs')}
+                className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-4 cursor-pointer group"
+              >
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-stone-900 group-hover:text-[#4A6B53] transition-colors truncate">
+                    {program.title}
+                  </div>
+                  <div className="text-[11px] text-stone-500 mt-0.5 truncate">
+                    {program.division} · PIC: {program.pic.split(' (')[0]}
+                  </div>
+                </div>
+                <span className="text-xs font-medium text-stone-700 tabular-nums shrink-0">
+                  {program.progressPercent}%
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Decision Log Summary */}
+        <div className="p-5 rounded-lg bg-white border border-[#E8E6DF] flex flex-col justify-between space-y-4">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+              <div>
+                <h2 className="text-sm font-semibold text-stone-900">Keputusan Musyawarah Terbaru</h2>
+                <p className="text-xs text-stone-500">Hasil kesepakatan rapat posko dan koordinasi desa</p>
+              </div>
+              <button
+                onClick={() => onNavigate('decisions')}
+                className="text-xs text-[#4A6B53] hover:underline font-medium inline-flex items-center gap-1"
+              >
+                <span>Semua</span>
+                <ArrowRight className="w-3 h-3" />
+              </button>
+            </div>
+
+            <div className="divide-y divide-stone-100">
+              {decisions.slice(0, 4).map((dec) => (
+                <div
+                  key={dec.id}
+                  onClick={() => onNavigate('decisions')}
+                  className="py-2.5 first:pt-0 last:pb-0 space-y-0.5 cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-stone-900 group-hover:text-[#4A6B53] transition-colors truncate">
+                      {dec.title}
+                    </span>
+                    <span className="text-[11px] text-stone-400 font-mono shrink-0">{dec.date}</span>
+                  </div>
+                  <p className="text-[11px] text-stone-500 line-clamp-1">
+                    PIC: {dec.pic}
+                  </p>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Posko Contact & Quick Notice */}
-          <div className="p-4 rounded-lg bg-[#F7F6F2] border border-[#E3E0D6] text-xs space-y-3">
-            <div className="font-semibold text-stone-800 flex items-center justify-between">
-              <span>Posko KKN Pringgasela Selatan</span>
-              <span className="text-[11px] text-[#4A6B53] font-medium">Desa Pringgasela Selatan</span>
-            </div>
-            <p className="text-stone-600 leading-relaxed">
-              Dusun Gubuk Lauk RT 03 (Sentra Tenun Gedogan). Kontak Ketua Tim (Josua Ujung): +62 882-9692-4050.
-            </p>
-            <div className="pt-2 border-t border-stone-200/70 flex items-center justify-between text-[11px] text-stone-500">
-              <span>DPL: Dr. Lalu Syamsuddin, M.Si.</span>
-              <button
-                onClick={() => onNavigate('members')}
-                className="text-[#4A6B53] font-medium hover:underline"
-              >
-                Lihat Kontak Tim
-              </button>
-            </div>
+          <div className="pt-3 border-t border-stone-100 flex items-center justify-between text-xs text-stone-500">
+            <span>{decisions.length} keputusan terdokumentasi</span>
+            <button
+              onClick={() => onNavigate('decisions')}
+              className="text-stone-700 hover:text-stone-900 font-medium"
+            >
+              Log Keputusan →
+            </button>
           </div>
         </div>
       </div>

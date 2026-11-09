@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
-import { ArchiveRecord } from '../../types';
+import { ArchiveRecord, UploadedFileMetadata } from '../../types';
+import { FileUploader } from '../common/FileUploader';
+import { detectArchiveFormat, triggerFileDownload } from '../../utils/storageService';
 import {
-  Archive,
   Plus,
-  FileText,
-  FileArchive,
   Download,
   Search,
-  ExternalLink,
+  AlertCircle,
 } from 'lucide-react';
 
 interface ArchiveViewProps {
@@ -25,6 +24,8 @@ export const ArchiveView: React.FC<ArchiveViewProps> = ({ records, onAddArchive 
   const [category, setCategory] = useState<ArchiveRecord['category']>('Legalitas & Izin');
   const [fileFormat, setFileFormat] = useState<ArchiveRecord['fileFormat']>('PDF');
   const [referenceNumber, setReferenceNumber] = useState('');
+  const [uploadedFile, setUploadedFile] = useState<UploadedFileMetadata | null>(null);
+  const [formError, setFormError] = useState('');
 
   const filtered = records.filter((r) => {
     const matchesFilter = filter === 'all' || r.category === filter;
@@ -36,21 +37,34 @@ export const ArchiveView: React.FC<ArchiveViewProps> = ({ records, onAddArchive 
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim()) {
+      setFormError('Nama dokumen arsip wajib diisi.');
+      return;
+    }
+    if (!uploadedFile) {
+      setFormError('Silakan pilih berkas dokumen yang akan diunggah terlebih dahulu.');
+      return;
+    }
 
     const newRecord: ArchiveRecord = {
       id: `arc-${Date.now()}`,
-      title,
+      title: title.trim(),
       category,
       fileFormat,
       dateUploaded: new Date().toISOString().slice(0, 10),
-      size: '1.8 MB',
+      size: uploadedFile.sizeFormatted || '1.8 MB',
       referenceNumber: referenceNumber || undefined,
+      fileUrl: uploadedFile.url,
+      fileName: uploadedFile.name,
+      storagePath: uploadedFile.storagePath,
     };
 
     onAddArchive(newRecord);
     setIsModalOpen(false);
     setTitle('');
+    setReferenceNumber('');
+    setUploadedFile(null);
+    setFormError('');
   };
 
   return (
@@ -72,7 +86,10 @@ export const ArchiveView: React.FC<ArchiveViewProps> = ({ records, onAddArchive 
         </div>
 
         <button
-          onClick={() => setIsModalOpen(true)}
+          onClick={() => {
+            setFormError('');
+            setIsModalOpen(true);
+          }}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#4A6B53] text-white text-xs font-medium hover:bg-[#3B5643] transition-colors shadow-2xs self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
@@ -132,7 +149,7 @@ export const ArchiveView: React.FC<ArchiveViewProps> = ({ records, onAddArchive 
                 {record.title}
               </h3>
 
-              <div className="flex items-center gap-3 text-[11px] text-stone-400 pt-1">
+              <div className="flex flex-wrap items-center gap-3 text-[11px] text-stone-400 pt-1">
                 <span>Diunggah: {record.dateUploaded}</span>
                 <span>·</span>
                 <span>Ukuran: {record.size}</span>
@@ -146,7 +163,12 @@ export const ArchiveView: React.FC<ArchiveViewProps> = ({ records, onAddArchive 
             </div>
 
             <button
-              onClick={() => alert(`Mengunduh berkas arsip: ${record.title}`)}
+              onClick={() =>
+                triggerFileDownload(
+                  record.fileUrl,
+                  record.fileName || `${record.title}.${record.fileFormat.toLowerCase()}`
+                )
+              }
               className="p-2 rounded-md hover:bg-stone-100 text-stone-600 transition-colors shrink-0"
               title="Unduh Berkas"
               aria-label={`Unduh ${record.title}`}
@@ -160,7 +182,7 @@ export const ArchiveView: React.FC<ArchiveViewProps> = ({ records, onAddArchive 
       {/* Add Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-stone-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg border border-[#E8E6DF] shadow-xl max-w-md w-full p-6 space-y-4">
+          <div className="bg-white rounded-lg border border-[#E8E6DF] shadow-xl max-w-md w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-stone-100">
               <h3 className="font-serif text-lg font-semibold text-stone-900">
                 Upload Dokumen Arsip
@@ -174,8 +196,35 @@ export const ArchiveView: React.FC<ArchiveViewProps> = ({ records, onAddArchive 
             </div>
 
             <form onSubmit={handleCreate} className="space-y-4 text-xs">
+              {formError && (
+                <div className="p-2.5 rounded-md bg-red-50 border border-red-200 text-red-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{formError}</span>
+                </div>
+              )}
+
+              <FileUploader
+                folder="archive"
+                accept="any"
+                multiple={false}
+                label="Pilih Berkas Dokumen Arsip *"
+                helperText="PDF, DOCX, XLSX, ZIP, atau Gambar (Maks 20MB)"
+                files={uploadedFile ? [uploadedFile] : []}
+                onChange={(files) => {
+                  const first = files[0] || null;
+                  setUploadedFile(first);
+                  setFormError('');
+                  if (first) {
+                    setFileFormat(detectArchiveFormat(first.name));
+                    if (!title.trim()) {
+                      setTitle(first.name.replace(/\.[^/.]+$/, ''));
+                    }
+                  }
+                }}
+              />
+
               <div className="space-y-1">
-                <label className="font-medium text-stone-700">Nama Dokumen</label>
+                <label className="font-medium text-stone-700">Nama Dokumen *</label>
                 <input
                   type="text"
                   required
@@ -253,3 +302,4 @@ export const ArchiveView: React.FC<ArchiveViewProps> = ({ records, onAddArchive 
     </div>
   );
 };
+
