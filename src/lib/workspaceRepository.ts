@@ -48,10 +48,45 @@ export async function listWorkspaceRecords<T extends WorkspaceRecord>(
     throw new Error(`Gagal memuat data ${moduleKey}: ${error.message}`);
   }
 
-  return (data || []).map((row: any) => ({
-    ...(row.payload || {}),
-    id: String(row.payload?.id ?? row.record_key),
-  })) as T[];
+  const refreshStorageUrls = async (value: any): Promise<any> => {
+    if (Array.isArray(value)) {
+      return Promise.all(value.map((item) => refreshStorageUrls(item)));
+    }
+    if (!value || typeof value !== 'object') return value;
+
+    const refreshed: Record<string, any> = {};
+    await Promise.all(
+      Object.entries(value).map(async ([key, nested]) => {
+        refreshed[key] = await refreshStorageUrls(nested);
+      })
+    );
+
+    const storagePath = typeof refreshed.storagePath === 'string'
+      ? refreshed.storagePath.replace(/^kkn-space\\//, '')
+      : null;
+    if (storagePath) {
+      const { data: signed, error: signError } = await supabase.storage
+        .from('kkn-space')
+        .createSignedUrl(storagePath, 60 * 60);
+      if (signError || !signed?.signedUrl) {
+        console.warn('Unable to refresh private media URL:', signError?.message || storagePath);
+        if ('url' in refreshed) refreshed.url = '';
+        if ('fileUrl' in refreshed) refreshed.fileUrl = '';
+      } else {
+        if ('url' in refreshed) refreshed.url = signed.signedUrl;
+        if ('fileUrl' in refreshed) refreshed.fileUrl = signed.signedUrl;
+      }
+    }
+
+    return refreshed;
+  };
+
+  return await Promise.all(
+    (data || []).map(async (row: any) => ({
+      ...(await refreshStorageUrls(row.payload || {})),
+      id: String(row.payload?.id ?? row.record_key),
+    }))
+  ) as T[];
 }
 
 export async function upsertWorkspaceRecord<T extends WorkspaceRecord>(
@@ -63,6 +98,22 @@ export async function upsertWorkspaceRecord<T extends WorkspaceRecord>(
     throw new Error(`Data ${moduleKey} harus memiliki ID yang stabil.`);
   }
 
+  const stripTransientStorageUrls = (input: any): any => {
+    if (Array.isArray(input)) return input.map(stripTransientStorageUrls);
+    if (!input || typeof input !== 'object') return input;
+
+    const output: Record<string, any> = { ...input };
+    if (typeof output.storagePath === 'string') {
+      if ('url' in output) output.url = '';
+      if ('fileUrl' in output) output.fileUrl = '';
+      if ('coverImageUrl' in output) output.coverImageUrl = '';
+    }
+    Object.keys(output).forEach((key) => {
+      output[key] = stripTransientStorageUrls(output[key]);
+    });
+    return output;
+  };
+
   const { error } = await supabase
     .from('kkn_workspace_records')
     .upsert(
@@ -70,7 +121,7 @@ export async function upsertWorkspaceRecord<T extends WorkspaceRecord>(
         project_id: OFFICIAL_PROJECT_ID,
         module_key: moduleKey,
         record_key: String(value.id),
-        payload: value,
+        payload: stripTransientStorageUrls(value),
       },
       { onConflict: 'project_id,module_key,record_key' }
     );
