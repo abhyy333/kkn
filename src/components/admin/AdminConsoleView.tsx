@@ -570,29 +570,7 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
       if (!isSupabaseConfigured) {
         edgeErrorMsg = 'Supabase belum terkonfigurasi.';
       }
-      if (!edgeSuccess && false) {
-        try {
-          const res = await fetch('/api/admin/reset-member-email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'remove',
-              member_id: removeEmailTarget.id,
-              confirm_member_name: removeConfirmName.trim(),
-              reason: removeReason.trim() || undefined,
-              actorEmail: user?.email || 'abhyy333@gmail.com',
-            }),
-          });
-          const resData = await res.json();
-          if (res.ok && resData.success) {
-            edgeSuccess = true;
-          } else {
-            edgeErrorMsg = resData.error || 'Server error';
-          }
-        } catch (srvErr: any) {
-          edgeErrorMsg = srvErr?.message || 'Gagal terhubung ke server';
-        }
-      }
+
 
       if (!edgeSuccess) {
         pushToast('error', 'Gagal Menghapus Email', edgeErrorMsg || 'Terjadi kesalahan saat menghapus email.');
@@ -720,30 +698,7 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
       if (!isSupabaseConfigured) {
         edgeErrorMsg = 'Supabase belum terkonfigurasi.';
       }
-      if (!edgeSuccess && false) {
-        try {
-          const res = await fetch('/api/admin/reset-member-email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'replace',
-              member_id: replaceEmailTarget.id,
-              new_email: cleanNewEmail,
-              confirm_member_name: replaceConfirmName.trim(),
-              reason: replaceReason.trim() || undefined,
-              actorEmail: user?.email || 'abhyy333@gmail.com',
-            }),
-          });
-          const resData = await res.json();
-          if (res.ok && resData.success) {
-            edgeSuccess = true;
-          } else {
-            edgeErrorMsg = resData.error || 'Server error';
-          }
-        } catch (srvErr: any) {
-          edgeErrorMsg = srvErr?.message || 'Gagal terhubung ke server';
-        }
-      }
+
 
       if (!edgeSuccess) {
         pushToast('error', 'Gagal Mengganti Email', edgeErrorMsg || 'Proses penggantian email tidak dapat diselesaikan.');
@@ -819,22 +774,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
         historyRows = [];
       }
 
-      // If still empty and it's m-4, provide initial bootstrap record
-      if (historyRows.length === 0 && m.id === 'm-4') {
-        historyRows = [
-          {
-            id: 'hist-boot-4',
-            member_id: 'm-4',
-            member_name: 'Abdul Habir Al Majdi',
-            previous_email: null,
-            replacement_email: 'abhyy333@gmail.com',
-            action: 'REGISTER',
-            performed_by: 'system@kknspace.id',
-            reason: 'Bootstrap akun Super Admin resmi',
-            created_at: '2026-07-19T08:30:00.000Z',
-          },
-        ];
-      }
 
       setMemberEmailHistoryList(historyRows);
     } catch (err) {
@@ -2281,16 +2220,16 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                         <div className="flex items-center gap-2">
                           <span
                             className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
-                              item.action === 'REMOVE'
+                              String(item.action).toLowerCase() === 'removed'
                                 ? 'bg-red-100 text-red-800'
-                                : item.action === 'REPLACE'
+                                : String(item.action).toLowerCase() === 'replaced'
                                 ? 'bg-blue-100 text-blue-800'
                                 : 'bg-emerald-100 text-emerald-800'
                             }`}
                           >
-                            {item.action === 'REMOVE'
+                            {String(item.action).toLowerCase() === 'removed'
                               ? 'HAPUS EMAIL'
-                              : item.action === 'REPLACE'
+                              : String(item.action).toLowerCase() === 'replaced'
                               ? 'GANTI EMAIL'
                               : 'DAFTAR EMAIL'}
                           </span>
