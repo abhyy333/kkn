@@ -7,6 +7,7 @@ import {
   normalizeRegisteredEmailRow,
   isFabricatedLegacyRecord,
 } from '../lib/supabase';
+import { listWorkspaceRecords, upsertWorkspaceRecord } from '../lib/workspaceRepository';
 import { INITIAL_MEMBERS } from '../data/mockData';
 import {
   RegisteredEmailRecord as TypesRegisteredEmailRecord,
@@ -155,10 +156,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const SUPER_ADMIN_EMAIL = 'abhyy333@gmail.com';
-const PROFILE_STORAGE_KEY = 'kkn_space_Authoritative_Profile_v3';
-const REGISTERED_EMAILS_STORAGE_KEY = 'kkn_space_registered_emails_v2';
 const KKN_PROJECT_ID = 'f5dcc382-8cc9-465a-b919-e58d6a688eea';
-const ADMIN_LOGS_STORAGE_KEY = 'kkn_space_admin_logs_v1';
 
 // In-memory deduplication & session-scoped cache to prevent duplicate database queries
 const inflightProfileRequests = new Map<string, Promise<UserProfile | null>>();
@@ -181,35 +179,6 @@ export const INITIAL_REGISTERED_EMAILS: RegisteredEmailRecord[] = [
     registeredBy: 'System Bootstrap',
     registeredAt: '2026-07-15T08:00:00.000Z',
     activatedAt: '2026-07-19T08:30:00.000Z',
-  },
-];
-
-export const INITIAL_ADMIN_LOGS: AdminActivityLog[] = [
-  {
-    id: 'log-1',
-    action: 'BOOTSTRAP_SUPER_ADMIN',
-    target: 'abhyy333@gmail.com',
-    adminEmail: 'system@kknspace.id',
-    adminName: 'System Security',
-    actorEmail: 'system@kknspace.id',
-    actorName: 'System Security',
-    timestamp: '2026-07-19T08:30:00.000Z',
-    details:
-      'Menautkan abhyy333@gmail.com ke profil Abdul Habir Al Majdi (Divisi Acara 1) dengan hak akses Super Admin.',
-    status: 'success',
-  },
-  {
-    id: 'log-2',
-    action: 'SYSTEM_SETTING_CHANGED',
-    target: 'Supabase Auth & registered_emails',
-    adminEmail: 'abhyy333@gmail.com',
-    adminName: 'Abdul Habir Al Majdi',
-    actorEmail: 'abhyy333@gmail.com',
-    actorName: 'Abdul Habir Al Majdi',
-    timestamp: '2026-07-19T09:00:00.000Z',
-    details:
-      'Mengintegrasikan autentikasi ke Supabase Auth dengan validasi tabel registered_emails.',
-    status: 'success',
   },
 ];
 
@@ -243,85 +212,20 @@ function toAppRegisteredEmailRecord(row: Record<string, any>): RegisteredEmailRe
 
 function saveCachedProfile(uid: string, profile: UserProfile) {
   memoryProfileCache.set(uid, profile);
-  if (profile.email) {
-    memoryProfileCache.set(profile.email.toLowerCase(), profile);
-  }
-  try {
-    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
-    const cache = raw ? JSON.parse(raw) : {};
-    cache[uid] = profile;
-    if (profile.email) {
-      cache[profile.email.toLowerCase()] = profile;
-    }
-    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(cache));
-  } catch (e) {
-    console.warn('Could not save profile to localStorage:', e);
-  }
+  if (profile.email) memoryProfileCache.set(profile.email.toLowerCase(), profile);
 }
 
 function getCachedProfile(uid: string, email?: string | null): UserProfile | null {
-  if (memoryProfileCache.has(uid)) {
-    return memoryProfileCache.get(uid) || null;
-  }
+  if (memoryProfileCache.has(uid)) return memoryProfileCache.get(uid) || null;
   if (email && memoryProfileCache.has(email.toLowerCase())) {
     return memoryProfileCache.get(email.toLowerCase()) || null;
   }
-  try {
-    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
-    if (!raw) return null;
-    const cache = JSON.parse(raw);
-    if (cache[uid]) {
-      memoryProfileCache.set(uid, cache[uid]);
-      return cache[uid];
-    }
-    if (email && cache[email.toLowerCase()]) {
-      const found = cache[email.toLowerCase()];
-      memoryProfileCache.set(uid, found);
-      return found;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function clearCachedProfile() {
   memoryProfileCache.clear();
   inflightProfileRequests.clear();
-  try {
-    localStorage.removeItem(PROFILE_STORAGE_KEY);
-  } catch {
-    // Ignore storage error
-  }
-}
-
-function getLocalRegisteredEmails(): RegisteredEmailRecord[] {
-  try {
-    const raw = localStorage.getItem(REGISTERED_EMAILS_STORAGE_KEY);
-    if (!raw) return INITIAL_REGISTERED_EMAILS;
-    const parsed = JSON.parse(raw) as RegisteredEmailRecord[];
-    const mergedMap = new Map<string, RegisteredEmailRecord>();
-    INITIAL_REGISTERED_EMAILS.forEach((item) =>
-      mergedMap.set(item.email.toLowerCase(), item)
-    );
-    if (Array.isArray(parsed)) {
-      parsed.forEach((item) => {
-        if (!item || !item.email || isFabricatedLegacyRecord(item)) return;
-        mergedMap.set(item.email.toLowerCase(), toAppRegisteredEmailRecord(item));
-      });
-    }
-    return Array.from(mergedMap.values());
-  } catch {
-    return INITIAL_REGISTERED_EMAILS;
-  }
-}
-
-function saveLocalRegisteredEmails(list: RegisteredEmailRecord[]) {
-  try {
-    localStorage.setItem(REGISTERED_EMAILS_STORAGE_KEY, JSON.stringify(list));
-  } catch (e) {
-    console.warn('Could not save registered emails locally:', e);
-  }
 }
 
 function mapSupabaseUserToAppUser(
@@ -375,14 +279,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
   const [activeMode, setActiveMode] = useState<ActiveWorkspaceMode>('workspace');
   const [registeredEmails, setRegisteredEmails] = useState<RegisteredEmailRecord[]>([]);
-  const [adminLogs, setAdminLogs] = useState<AdminActivityLog[]>(() => {
-    try {
-      const raw = localStorage.getItem(ADMIN_LOGS_STORAGE_KEY);
-      return raw ? JSON.parse(raw) : INITIAL_ADMIN_LOGS;
-    } catch {
-      return INITIAL_ADMIN_LOGS;
-    }
-  });
+  const [adminLogs, setAdminLogs] = useState<AdminActivityLog[]>([]);;
 
   // Track whether the user had an active session in this lifecycle to detect unexpected session expiration
   const hadActiveSessionRef = useRef(false);
@@ -464,59 +361,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const fetchActivityLogs = async (): Promise<AdminActivityLogRecord[]> => {
-    let combined = [...adminLogs];
-    if (isSupabaseConfigured) {
-      try {
-        const { data: sbLogs, error: sbLogErr } = await supabase
-          .from('admin_activity_logs')
-          .select('*')
-          .order('timestamp', { ascending: false })
-          .limit(200);
-        if (!sbLogErr && Array.isArray(sbLogs) && sbLogs.length > 0) {
-          const mappedSbLogs: AdminActivityLog[] = sbLogs.map((l: any) => ({
-            id: String(l.id),
-            timestamp: String(l.timestamp || l.created_at || new Date().toISOString()),
-            adminEmail: String(l.admin_email || l.adminEmail || SUPER_ADMIN_EMAIL),
-            adminName: String(l.admin_name || l.adminName || 'Super Admin'),
-            actorEmail: String(l.admin_email || l.adminEmail || SUPER_ADMIN_EMAIL),
-            actorName: String(l.admin_name || l.adminName || 'Super Admin'),
-            action: (l.action || 'SYSTEM_SETTING_CHANGED') as AdminActivityLogRecord['action'],
-            target: String(l.target || '-'),
-            details: String(l.details || ''),
-            status: (l.status === 'warning' || l.status === 'error' ? l.status : 'success') as
-              | 'success'
-              | 'warning'
-              | 'error',
-            ip: l.ip,
-          }));
-          const logMap = new Map<string, AdminActivityLog>();
-          [...mappedSbLogs, ...combined].forEach((item) => logMap.set(item.id, item));
-          combined = Array.from(logMap.values());
-        }
-      } catch {
-        // Optional table
-      }
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase belum terkonfigurasi. Log aktivitas tidak dapat dimuat.');
     }
-
-    try {
-      const logsRes = await fetch('/api/admin/activity-logs');
-      if (logsRes.ok) {
-        const logsData = await logsRes.json();
-        const list = logsData.logs || [];
-        if (Array.isArray(list) && list.length > 0) {
-          const logMap = new Map<string, AdminActivityLog>();
-          [...combined, ...list].forEach((item: any) => logMap.set(item.id, item));
-          combined = Array.from(logMap.values());
-        }
-      }
-    } catch {
-      // Fallback to local logs
-    }
-
-    combined.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-    setAdminLogs(combined);
-    localStorage.setItem(ADMIN_LOGS_STORAGE_KEY, JSON.stringify(combined));
-    return combined;
+    const records = await listWorkspaceRecords<AdminActivityLog>('admin_logs');
+    records.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+    setAdminLogs(records);
+    return records;
   };
 
   /**
@@ -1165,8 +1016,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     target: string,
     details: string
   ) => {
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase belum terkonfigurasi. Log aktivitas tidak dapat disimpan.');
+    }
     const newLog: AdminActivityLog = {
-      id: `log-${Date.now()}`,
+      id: crypto.randomUUID(),
       action: action as AdminActivityLogRecord['action'],
       target,
       adminEmail: user?.email || SUPER_ADMIN_EMAIL,
@@ -1177,27 +1031,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       details,
       status: 'success',
     };
-
-    const nextLogs = [newLog, ...adminLogs];
-    setAdminLogs(nextLogs);
-    localStorage.setItem(ADMIN_LOGS_STORAGE_KEY, JSON.stringify(nextLogs));
-
-    if (isSupabaseConfigured) {
-      try {
-        await supabase.from('admin_activity_logs').insert({
-          id: newLog.id,
-          action: newLog.action,
-          target: newLog.target,
-          admin_email: newLog.adminEmail,
-          admin_name: newLog.adminName,
-          timestamp: newLog.timestamp,
-          details: newLog.details,
-          status: newLog.status,
-        });
-      } catch {
-        // Optional table
-      }
-    }
+    await upsertWorkspaceRecord('admin_logs', newLog);
+    setAdminLogs((prev) => [newLog, ...prev]);
   };
 
   const registerMemberEmail = async (
@@ -1443,7 +1278,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         : r
     );
     setRegisteredEmails(updatedList);
-    saveLocalRegisteredEmails(updatedList);
 
     await logAdminActivity(
       'DISABLE_ACCOUNT',
@@ -1552,7 +1386,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         : r
     );
     setRegisteredEmails(updatedList);
-    saveLocalRegisteredEmails(updatedList);
 
     await logAdminActivity(
       'RESTORE_ACCOUNT',
@@ -1736,7 +1569,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               }
             : r
         );
-        saveLocalRegisteredEmails(next);
         return next;
       });
     }
