@@ -128,14 +128,10 @@ export function normalizeRegisteredEmailRow(
     rawStatus === 'activated' ||
     rawStatus === 'active' ||
     rawStatus === 'accepted' ||
-    Boolean(row.is_active) ||
-    Boolean(row.is_activated) ||
-    Boolean(
-      row.activated_uid || row.activatedUid || row.user_id || row.auth_user_id
-    );
+    Boolean(row.activated_at || row.activated_uid || row.activatedUid || row.auth_user_id);
 
   let status: 'pending' | 'activated' | 'revoked' | 'disabled' = 'pending';
-  if (rawStatus === 'disabled' || row.is_active === false || row.is_disabled === true) {
+  if (row.is_enabled === false || rawStatus === 'disabled' || row.is_active === false || row.is_disabled === true) {
     status = 'disabled';
   } else if (rawStatus === 'revoked' || rawStatus === 'inactive') {
     status = 'revoked';
@@ -145,89 +141,31 @@ export function normalizeRegisteredEmailRow(
 
   const rawRole = String(
     row.role || row.member_role || row.organizational_role || 'member'
-  )
-    .trim()
-    .toLowerCase();
-  const rawSystemRole = String(row.system_role || row.systemRole || 'user')
-    .trim()
-    .toLowerCase();
-
-  const isDpl = email === 'ellymaelani@gmail.com';
-  const role: SupabaseRegisteredEmailRow['role'] = isDpl
-    ? 'dpl'
-    : rawRole === 'ketua' ||
-      rawRole === 'admin' ||
-      rawRole === 'member' ||
-      rawRole === 'dpl' ||
-      rawRole === 'viewer'
+  ).trim().toLowerCase();
+  const role: SupabaseRegisteredEmailRow['role'] =
+    rawRole === 'ketua' || rawRole === 'admin' || rawRole === 'member' || rawRole === 'dpl' || rawRole === 'viewer'
       ? rawRole
-      : 'member';
+      : row.member_category === 'supervisor' ? 'dpl' : 'member';
 
-  const systemRole: SupabaseRegisteredEmailRow['systemRole'] = isDpl
-    ? 'dpl'
-    : email === 'abhyy333@gmail.com'
-      ? 'super_admin'
-      : rawSystemRole === 'super_admin' || rawSystemRole === 'admin' || rawSystemRole === 'dpl'
-        ? rawSystemRole
-        : 'user';
+  const rawSystemRole = String(row.system_role || row.systemRole || 'user').trim().toLowerCase();
+  const systemRole: SupabaseRegisteredEmailRow['systemRole'] =
+    rawSystemRole === 'super_admin' || rawSystemRole === 'admin' || rawSystemRole === 'dpl'
+      ? rawSystemRole
+      : 'user';
 
   return {
     id: row.id ? String(row.id) : undefined,
     email,
-    name: String(
-      row.name ||
-        row.full_name ||
-        row.display_name ||
-        (isDpl
-          ? 'Lalu Muhammad Aby Dujana, M.Si.'
-          : email === 'abhyy333@gmail.com'
-            ? 'Abdul Habir Al Majdi'
-            : '')
-    ).trim(),
-    position: String(
-      row.position ||
-        row.jabatan ||
-        (isDpl
-          ? 'Dosen Pembimbing Lapangan'
-          : email === 'abhyy333@gmail.com'
-            ? 'Divisi Acara 1'
-            : 'Anggota KKN')
-    ).trim(),
-    division: String(
-      row.division ||
-        row.divisi ||
-        (isDpl
-          ? 'DPL / Supervisi'
-          : email === 'abhyy333@gmail.com'
-            ? 'Divisi Acara'
-            : 'Umum')
-    ).trim(),
-    role: isDpl ? 'dpl' : email === 'abhyy333@gmail.com' ? 'member' : role,
-    systemRole: isDpl ? 'dpl' : systemRole,
-    memberId:
-      row.member_id ||
-      row.memberId ||
-      (isDpl
-        ? 'c7bf53d4-1c27-424e-992a-7c7c0f98707a'
-        : email === 'abhyy333@gmail.com'
-          ? 'm-4'
-          : undefined),
-    status: isDpl || email === 'abhyy333@gmail.com' ? 'activated' : status,
-    registeredBy: String(
-      row.registered_by || row.registeredBy || 'System Admin'
-    ),
-    registeredAt: String(
-      row.registered_at ||
-        row.registeredAt ||
-        row.created_at ||
-        new Date().toISOString()
-    ),
-    activatedUid:
-      row.activated_uid ||
-      row.activatedUid ||
-      row.user_id ||
-      row.auth_user_id ||
-      undefined,
+    name: String(row.name || row.member_name || row.full_name || row.display_name || '').trim(),
+    position: String(row.position || row.position_title || row.jabatan || 'Anggota KKN').trim(),
+    division: String(row.division || row.divisi || 'Umum').trim(),
+    role,
+    systemRole,
+    memberId: row.member_id || row.memberId || undefined,
+    status,
+    registeredBy: String(row.registered_by || row.registeredBy || 'Administrator KKN'),
+    registeredAt: String(row.registered_at || row.registeredAt || row.created_at || new Date().toISOString()),
+    activatedUid: row.auth_user_id || row.activated_uid || row.activatedUid || undefined,
     activatedAt: row.activated_at || row.activatedAt || undefined,
     disabledAt: row.disabled_at || row.disabledAt || undefined,
     disabledReason: row.disabled_reason || row.disabledReason || undefined,
