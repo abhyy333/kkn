@@ -23,7 +23,6 @@ export type WorkspaceModuleKey =
 
 export interface WorkspaceRecord {
   id: string;
-  [key: string]: unknown;
 }
 
 function ensureConfigured() {
@@ -32,7 +31,7 @@ function ensureConfigured() {
   }
 }
 
-export async function listWorkspaceRecords<T extends WorkspaceRecord>(
+export async function listWorkspaceRecords<T extends { id: string }>(
   moduleKey: WorkspaceModuleKey
 ): Promise<T[]> {
   ensureConfigured();
@@ -89,7 +88,7 @@ export async function listWorkspaceRecords<T extends WorkspaceRecord>(
   ) as T[];
 }
 
-export async function upsertWorkspaceRecord<T extends WorkspaceRecord>(
+export async function upsertWorkspaceRecord<T extends { id: string }>(
   moduleKey: WorkspaceModuleKey,
   value: T
 ): Promise<void> {
