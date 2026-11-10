@@ -31,7 +31,7 @@ interface DplSupervisionAdminViewProps {
 }
 
 interface RegisteredDplRecord {
-  email: string;
+  email: string | null;
   status: string;
   activated_at?: string;
   registered_at?: string;
@@ -57,9 +57,9 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
   const [isLoading, setIsLoading] = useState(false);
 
   const registeredDpl: RegisteredDplRecord = {
-    email: dplStatus?.admin_private?.email || dplStatus?.account?.email || 'ellymaelani@gmail.com',
-    status: dplStatus?.account?.is_active ? 'activated' : (dplStatus?.account?.activation_status || 'activated'),
-    registered_at: dplStatus?.admin_private?.registered_at || '2026-07-01T00:00:00.000Z',
+    email: dplStatus?.admin_private?.email || null,
+    status: dplStatus?.account?.activation_status || 'unknown',
+    registered_at: dplStatus?.admin_private?.registered_at,
   };
 
   // Fetch actual DPL review logs from Supabase
