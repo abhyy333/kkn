@@ -788,66 +788,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
     }
   };
 
-  // 3. Open Direct Email Registration for Member ("Daftarkan Email")
-  const handleOpenRegisterTargetEmail = (m: Member) => {
-    setRegisterEmailTarget(m);
-    setRegisterTargetEmailVal('');
-  };
-
-  // Execute Direct Email Registration
-  const handleExecuteRegisterTargetEmail = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!registerEmailTarget) return;
-    const cleanEmail = registerTargetEmailVal.trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes('@')) {
-      pushToast('error', 'Format Email Tidak Valid', 'Masukkan alamat email yang valid.');
-      return;
-    }
-
-    // Uniqueness validation
-    const duplicate = registeredEmails.find(
-      (r) =>
-        r.email.trim().toLowerCase() === cleanEmail &&
-        String(r.memberId || '') !== String(registerEmailTarget.databaseId || registerEmailTarget.id)
-    );
-    if (duplicate) {
-      pushToast(
-        'error',
-        'Email Sudah Digunakan',
-        `Alamat email "${cleanEmail}" sudah terdaftar untuk anggota ${duplicate.name}. Gunakan alamat email unik.`
-      );
-      return;
-    }
-
-    setIsSubmittingRegisterTarget(true);
-    try {
-      const created = await registerMemberEmail(
-        registerEmailTarget.name,
-        cleanEmail,
-        registerEmailTarget.position || registerEmailTarget.role,
-        registerEmailTarget.division,
-        registerEmailTarget.databaseId || registerEmailTarget.id
-      );
-
-      await loadData();
-      setRegisterEmailTarget(null);
-      setRegisterTargetEmailVal('');
-      pushToast(
-        'success',
-        'Email Berhasil Didaftarkan',
-        `Alamat email ${cleanEmail} telah terdaftar untuk ${registerEmailTarget.name}. Status: Menunggu Aktivasi.`
-      );
-    } catch (err: any) {
-      if (err?.message?.includes('unique') || err?.code === '23505') {
-        pushToast('error', 'Email Sudah Digunakan', `Alamat email "${cleanEmail}" sudah digunakan.`);
-      } else {
-        pushToast('error', 'Gagal Mendaftarkan Email', err?.message || 'Terjadi kesalahan.');
-      }
-    } finally {
-      setIsSubmittingRegisterTarget(false);
-    }
-  };
-
   // 4. Open Dedicated Read-Only History Panel ("Riwayat Email")
   const handleOpenEmailHistory = async (m: Member) => {
     setEmailHistoryTarget(m);
@@ -858,11 +798,17 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
         try {
           const { data, error } = await supabase
             .from('member_email_history')
-            .select('*')
-            .eq('member_id', m.id)
-            .order('created_at', { ascending: false });
+            .select('id,project_id,member_id,previous_email,new_email,action,changed_by_name_snapshot,changed_at,reason')
+            .eq('member_id', m.databaseId || m.id)
+            .order('changed_at', { ascending: false });
           if (!error && Array.isArray(data)) {
-            historyRows = data;
+            historyRows = data.map((row: any) => ({
+              ...row,
+              member_name: m.name,
+              replacement_email: row.new_email,
+              performed_by: row.changed_by_name_snapshot,
+              created_at: row.changed_at,
+            }));
           }
         } catch (sbErr) {
           console.warn('member_email_history fetch notice:', sbErr);
@@ -870,15 +816,7 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
       }
 
       if (historyRows.length === 0) {
-        try {
-          const res = await fetch(`/api/admin/email-history/${m.id}`);
-          if (res.ok) {
-            const json = await res.json();
-            if (Array.isArray(json.history)) {
-              historyRows = json.history;
-            }
-          }
-        } catch {}
+        historyRows = [];
       }
 
       // If still empty and it's m-4, provide initial bootstrap record
