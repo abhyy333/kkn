@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Member } from '../../types';
 import { useAuth } from '../../context/AuthContext';
-import { InvitationManagerModal } from '../admin/InvitationManagerModal';
 import { EditMemberModal } from './EditMemberModal';
 import { MemberDetailModal } from './MemberDetailModal';
 import { formatInternationalPhone, getWhatsAppUrl, maskPhoneNumber } from '../../utils/phone';
@@ -30,8 +29,8 @@ import {
   Sparkles,
 } from 'lucide-react';
 
-import { OFFICIAL_DPL_MEMBER_ID, DPL_SUPERVISOR } from '../../data/mockData';
-import { supabase, isSupabaseConfigured } from '../../lib/supabase';
+import { DPL_SUPERVISOR } from '../../data/mockData';
+import { useDplAccountStatus } from '../../hooks/useDplAccountStatus';
 
 interface MembersViewProps {
   members: Member[];
@@ -57,36 +56,17 @@ export const MembersView: React.FC<MembersViewProps> = ({
   onNavigateToAdmin,
   onNavigate,
 }) => {
-  const { user, profile, isAdmin, isSuperAdmin } = useAuth();
-  const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [dplRegStatus, setDplRegStatus] = useState<{ email: string; status: string } | null>(null);
+  const { user, profile, isSuperAdmin } = useAuth();
+  const { dplStatus, isLoading: isDplStatusLoading } = useDplAccountStatus(user?.email || undefined);
+  const dplRegStatus = dplStatus
+    ? {
+        email: dplStatus.admin_private?.email || '',
+        status: dplStatus.account.activation_status,
+        registered: dplStatus.account.email_registered,
+      }
+    : null;
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [selectedMemberForDetail, setSelectedMemberForDetail] = useState<Member | null>(null);
-
-  // Fetch actual DPL registered email status
-  const fetchDplStatus = useCallback(async () => {
-    try {
-      if (isSupabaseConfigured) {
-        const { data } = await supabase
-          .from('registered_emails')
-          .select('email, status')
-          .eq('member_id', OFFICIAL_DPL_MEMBER_ID)
-          .maybeSingle();
-
-        if (data) {
-          setDplRegStatus({ email: data.email, status: data.status || 'pending_activation' });
-        } else {
-          setDplRegStatus(null);
-        }
-      }
-    } catch (err) {
-      console.warn('Failed to fetch DPL status:', err);
-    }
-  }, []);
-
-  React.useEffect(() => {
-    fetchDplStatus();
-  }, [fetchDplStatus]);
 
   const openMemberPage = (m: Member) => {
     if (onNavigate) {
@@ -235,11 +215,6 @@ export const MembersView: React.FC<MembersViewProps> = ({
   return (
     <div className="space-y-8 max-w-6xl mx-auto pb-12">
       {/* Modals */}
-      <InvitationManagerModal
-        isOpen={isInviteOpen}
-        onClose={() => setIsInviteOpen(false)}
-      />
-
       <EditMemberModal
         isOpen={!!editingMember}
         member={editingMember}
@@ -278,14 +253,6 @@ export const MembersView: React.FC<MembersViewProps> = ({
             >
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
               <span>Kelola Registrasi Email (Admin Console)</span>
-            </button>
-          ) : isAdmin ? (
-            <button
-              onClick={() => setIsInviteOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#4A6B53] text-white text-xs font-medium hover:bg-[#3B5643] transition-colors shadow-2xs"
-            >
-              <UserPlus className="w-4 h-4" />
-              <span>Kelola Undangan</span>
             </button>
           ) : null}
         </div>
@@ -383,10 +350,16 @@ export const MembersView: React.FC<MembersViewProps> = ({
                 </span>
                 <span className="flex items-center gap-1 text-[11px]">
                   <Mail className="w-3 h-3 text-stone-400" />
-                  {dplRegStatus ? (
-                    <strong className="font-mono text-stone-800">{dplRegStatus.email}</strong>
-                  ) : (
+                  {dplRegStatus?.registered ? (
+                    dplRegStatus.email
+                      ? <strong className="font-mono text-stone-800">{dplRegStatus.email}</strong>
+                      : <span className="text-stone-500 italic">Terdaftar (email hanya terlihat Admin)</span>
+                  ) : dplRegStatus?.status === 'disabled' ? (
+                    <span className="text-red-600 italic">Akun DPL Nonaktif</span>
+                  ) : dplRegStatus ? (
                     <span className="text-stone-500 italic">Belum Didaftarkan</span>
+                  ) : (
+                    <span className="text-stone-500 italic">{isDplStatusLoading ? 'Memuat status...' : 'Status tidak tersedia'}</span>
                   )}
                 </span>
               </div>
@@ -396,7 +369,7 @@ export const MembersView: React.FC<MembersViewProps> = ({
           {/* DPL Actions */}
           <div className="pt-2.5 border-t border-stone-200/80 flex flex-wrap items-center justify-between gap-2 text-[11px]">
             <div className="flex items-center gap-2">
-              {dplRegStatus ? (
+              {dplRegStatus?.registered ? (
                 <span
                   className={`inline-flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-semibold border ${
                     dplRegStatus.status === 'activated' || dplRegStatus.status === 'active'
@@ -416,9 +389,17 @@ export const MembersView: React.FC<MembersViewProps> = ({
                     </>
                   )}
                 </span>
-              ) : (
+              ) : dplRegStatus?.status === 'disabled' ? (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-red-50 border border-red-200 text-red-700 font-medium">
+                  <span>Akun DPL Nonaktif</span>
+                </span>
+              ) : dplRegStatus ? (
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-stone-100 border border-stone-200 text-stone-600 font-medium">
                   <span>Email DPL Belum Didaftarkan</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-stone-100 border border-stone-200 text-stone-600 font-medium">
+                  <span>{isDplStatusLoading ? 'Memuat status DPL...' : 'Status DPL tidak tersedia'}</span>
                 </span>
               )}
             </div>

@@ -31,7 +31,7 @@ interface DplSupervisionAdminViewProps {
 }
 
 interface RegisteredDplRecord {
-  email: string;
+  email: string | null;
   status: string;
   activated_at?: string;
   registered_at?: string;
@@ -51,16 +51,20 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
   members,
   onRefreshData,
 }) => {
-  const { dplStatus } = useDplAccountStatus('abhyy333@gmail.com');
+  const { dplStatus, isLoading: isDplStatusLoading } = useDplAccountStatus('abhyy333@gmail.com');
+  const dplActivationStatus = dplStatus?.account.activation_status || 'unknown';
   const [reviewLogs, setReviewLogs] = useState<DplReviewLogRecord[]>([]);
   const [selectedReport, setSelectedReport] = useState<ReportRecord | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const registeredDpl: RegisteredDplRecord = {
-    email: dplStatus?.admin_private?.email || dplStatus?.account?.email || 'ellymaelani@gmail.com',
-    status: dplStatus?.account?.is_active ? 'activated' : (dplStatus?.account?.activation_status || 'activated'),
-    registered_at: dplStatus?.admin_private?.registered_at || '2026-07-01T00:00:00.000Z',
-  };
+  const registeredDpl: RegisteredDplRecord | null =
+    dplStatus?.account?.email_registered
+      ? {
+          email: dplStatus.admin_private?.email || null,
+          status: dplStatus.account.activation_status,
+          registered_at: dplStatus.admin_private?.registered_at,
+        }
+      : null;
 
   // Fetch actual DPL review logs from Supabase
   const loadDplSupervisionData = useCallback(async () => {
@@ -161,24 +165,37 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
               <div className="p-3 rounded-lg bg-stone-50 border border-stone-200 text-xs space-y-0.5 min-w-[200px]">
                 <span className="text-stone-400 text-[10px] block">Email Login DPL:</span>
                 <span className="font-mono font-bold text-stone-900 block truncate">
-                  {registeredDpl.email}
+                  {registeredDpl.email || 'Email hanya terlihat Super Admin'}
                 </span>
                 <div className="pt-1 flex items-center gap-1 text-[11px]">
                   {registeredDpl.status === 'activated' || registeredDpl.status === 'active' ? (
                     <span className="text-emerald-700 font-semibold flex items-center gap-1">
                       <CheckCircle2 className="w-3.5 h-3.5" /> Akun Aktif
                     </span>
-                  ) : (
+                  ) : registeredDpl.status === 'pending_activation' ? (
                     <span className="text-amber-800 font-semibold flex items-center gap-1">
                       <Clock className="w-3.5 h-3.5 text-amber-600" /> Menunggu Aktivasi
+                    </span>
+                  ) : (
+                    <span className="text-red-700 font-semibold flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5" /> Akun Nonaktif
                     </span>
                   )}
                 </div>
               </div>
             ) : (
               <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1">
-                <span className="font-semibold block text-[11px]">Status Email: Belum Didaftarkan</span>
-                <button
+                <span className="font-semibold block text-[11px]">
+                  {isDplStatusLoading
+                    ? 'Memuat status email DPL...'
+                    : !dplStatus
+                      ? 'Status Email: Tidak Tersedia'
+                      : dplActivationStatus === 'disabled'
+                        ? 'Email DPL Dinonaktifkan'
+                        : 'Status Email: Belum Didaftarkan'}
+                </span>
+                {dplStatus && !dplStatus.account.email_registered && (
+                  <button
                   onClick={() => {
                     window.location.hash = '#admin';
                   }}
@@ -186,6 +203,7 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
                 >
                   Kelola DPL di Admin Console
                 </button>
+                )}
               </div>
             )}
           </div>

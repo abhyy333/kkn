@@ -7,6 +7,7 @@ import {
   normalizeRegisteredEmailRow,
   isFabricatedLegacyRecord,
 } from '../lib/supabase';
+import { listWorkspaceRecords, upsertWorkspaceRecord } from '../lib/workspaceRepository';
 import { INITIAL_MEMBERS } from '../data/mockData';
 import {
   RegisteredEmailRecord as TypesRegisteredEmailRecord,
@@ -155,9 +156,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const SUPER_ADMIN_EMAIL = 'abhyy333@gmail.com';
-const PROFILE_STORAGE_KEY = 'kkn_space_Authoritative_Profile_v2';
-const REGISTERED_EMAILS_STORAGE_KEY = 'kkn_space_registered_emails_v1';
-const ADMIN_LOGS_STORAGE_KEY = 'kkn_space_admin_logs_v1';
+const KKN_PROJECT_ID = 'f5dcc382-8cc9-465a-b919-e58d6a688eea';
 
 // In-memory deduplication & session-scoped cache to prevent duplicate database queries
 const inflightProfileRequests = new Map<string, Promise<UserProfile | null>>();
@@ -166,52 +165,6 @@ const memoryProfileCache = new Map<string, UserProfile>();
 // Authoritative Initial Registered Emails Directory
 // Strictly contains ONLY confirmed super_admin abhyy333@gmail.com (Abdul Habir Al Majdi - Divisi Acara 1).
 // Other members start with empty email ("Belum Didaftarkan") until registered by super_admin.
-export const INITIAL_REGISTERED_EMAILS: RegisteredEmailRecord[] = [
-  {
-    id: 'abhyy333_gmail_com',
-    email: 'abhyy333@gmail.com',
-    name: 'Abdul Habir Al Majdi',
-    position: 'Divisi Acara 1',
-    division: 'Divisi Acara',
-    role: 'member',
-    systemRole: 'super_admin',
-    memberId: 'm-4',
-    status: 'activated',
-    registeredBy: 'System Bootstrap',
-    registeredAt: '2026-07-15T08:00:00.000Z',
-    activatedAt: '2026-07-19T08:30:00.000Z',
-  },
-];
-
-export const INITIAL_ADMIN_LOGS: AdminActivityLog[] = [
-  {
-    id: 'log-1',
-    action: 'BOOTSTRAP_SUPER_ADMIN',
-    target: 'abhyy333@gmail.com',
-    adminEmail: 'system@kknspace.id',
-    adminName: 'System Security',
-    actorEmail: 'system@kknspace.id',
-    actorName: 'System Security',
-    timestamp: '2026-07-19T08:30:00.000Z',
-    details:
-      'Menautkan abhyy333@gmail.com ke profil Abdul Habir Al Majdi (Divisi Acara 1) dengan hak akses Super Admin.',
-    status: 'success',
-  },
-  {
-    id: 'log-2',
-    action: 'SYSTEM_SETTING_CHANGED',
-    target: 'Supabase Auth & registered_emails',
-    adminEmail: 'abhyy333@gmail.com',
-    adminName: 'Abdul Habir Al Majdi',
-    actorEmail: 'abhyy333@gmail.com',
-    actorName: 'Abdul Habir Al Majdi',
-    timestamp: '2026-07-19T09:00:00.000Z',
-    details:
-      'Mengintegrasikan autentikasi ke Supabase Auth dengan validasi tabel registered_emails.',
-    status: 'success',
-  },
-];
-
 function sanitizeEmailId(email: string): string {
   return email.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
 }
@@ -242,85 +195,20 @@ function toAppRegisteredEmailRecord(row: Record<string, any>): RegisteredEmailRe
 
 function saveCachedProfile(uid: string, profile: UserProfile) {
   memoryProfileCache.set(uid, profile);
-  if (profile.email) {
-    memoryProfileCache.set(profile.email.toLowerCase(), profile);
-  }
-  try {
-    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
-    const cache = raw ? JSON.parse(raw) : {};
-    cache[uid] = profile;
-    if (profile.email) {
-      cache[profile.email.toLowerCase()] = profile;
-    }
-    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(cache));
-  } catch (e) {
-    console.warn('Could not save profile to localStorage:', e);
-  }
+  if (profile.email) memoryProfileCache.set(profile.email.toLowerCase(), profile);
 }
 
 function getCachedProfile(uid: string, email?: string | null): UserProfile | null {
-  if (memoryProfileCache.has(uid)) {
-    return memoryProfileCache.get(uid) || null;
-  }
+  if (memoryProfileCache.has(uid)) return memoryProfileCache.get(uid) || null;
   if (email && memoryProfileCache.has(email.toLowerCase())) {
     return memoryProfileCache.get(email.toLowerCase()) || null;
   }
-  try {
-    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
-    if (!raw) return null;
-    const cache = JSON.parse(raw);
-    if (cache[uid]) {
-      memoryProfileCache.set(uid, cache[uid]);
-      return cache[uid];
-    }
-    if (email && cache[email.toLowerCase()]) {
-      const found = cache[email.toLowerCase()];
-      memoryProfileCache.set(uid, found);
-      return found;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function clearCachedProfile() {
   memoryProfileCache.clear();
   inflightProfileRequests.clear();
-  try {
-    localStorage.removeItem(PROFILE_STORAGE_KEY);
-  } catch {
-    // Ignore storage error
-  }
-}
-
-function getLocalRegisteredEmails(): RegisteredEmailRecord[] {
-  try {
-    const raw = localStorage.getItem(REGISTERED_EMAILS_STORAGE_KEY);
-    if (!raw) return INITIAL_REGISTERED_EMAILS;
-    const parsed = JSON.parse(raw) as RegisteredEmailRecord[];
-    const mergedMap = new Map<string, RegisteredEmailRecord>();
-    INITIAL_REGISTERED_EMAILS.forEach((item) =>
-      mergedMap.set(item.email.toLowerCase(), item)
-    );
-    if (Array.isArray(parsed)) {
-      parsed.forEach((item) => {
-        if (!item || !item.email || isFabricatedLegacyRecord(item)) return;
-        mergedMap.set(item.email.toLowerCase(), toAppRegisteredEmailRecord(item));
-      });
-    }
-    return Array.from(mergedMap.values());
-  } catch {
-    return INITIAL_REGISTERED_EMAILS;
-  }
-}
-
-function saveLocalRegisteredEmails(list: RegisteredEmailRecord[]) {
-  try {
-    localStorage.setItem(REGISTERED_EMAILS_STORAGE_KEY, JSON.stringify(list));
-  } catch (e) {
-    console.warn('Could not save registered emails locally:', e);
-  }
 }
 
 function mapSupabaseUserToAppUser(
@@ -373,17 +261,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     detectUrlRecoveryContext
   );
   const [activeMode, setActiveMode] = useState<ActiveWorkspaceMode>('workspace');
-  const [registeredEmails, setRegisteredEmails] = useState<RegisteredEmailRecord[]>(
-    getLocalRegisteredEmails
-  );
-  const [adminLogs, setAdminLogs] = useState<AdminActivityLog[]>(() => {
-    try {
-      const raw = localStorage.getItem(ADMIN_LOGS_STORAGE_KEY);
-      return raw ? JSON.parse(raw) : INITIAL_ADMIN_LOGS;
-    } catch {
-      return INITIAL_ADMIN_LOGS;
-    }
-  });
+  const [registeredEmails, setRegisteredEmails] = useState<RegisteredEmailRecord[]>([]);
+  const [adminLogs, setAdminLogs] = useState<AdminActivityLog[]>([]);;
 
   // Track whether the user had an active session in this lifecycle to detect unexpected session expiration
   const hadActiveSessionRef = useRef(false);
@@ -398,116 +277,80 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const fetchRegisteredEmails = async (): Promise<RegisteredEmailRecord[]> => {
-    const mergedMap = new Map<string, RegisteredEmailRecord>();
-    getLocalRegisteredEmails().forEach((item) => {
-      if (!isFabricatedLegacyRecord(item)) {
-        mergedMap.set(item.email.toLowerCase(), item);
-      }
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase belum terkonfigurasi. Data registrasi email tidak dapat dimuat.');
+    }
+
+    const [{ data: registryRows, error: registryError }, { data: memberRows, error: memberError }, { data: accessRows, error: accessError }] = await Promise.all([
+      supabase
+        .from('registered_emails')
+        .select('id,project_id,member_id,email,system_role,is_enabled,registered_by,activated_at,created_at')
+        .eq('project_id', KKN_PROJECT_ID)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('members')
+        .select('id,project_id,full_name,position_title,division,member_category,status,auth_user_id')
+        .eq('project_id', KKN_PROJECT_ID),
+      supabase
+        .from('member_access')
+        .select('member_id,user_id,role,is_active,project_id')
+        .eq('project_id', KKN_PROJECT_ID),
+    ]);
+
+    if (registryError) throw new Error(`Gagal membaca registered_emails: ${registryError.message}`);
+    if (memberError) throw new Error(`Gagal membaca profil anggota: ${memberError.message}`);
+    if (accessError) throw new Error(`Gagal membaca akses anggota: ${accessError.message}`);
+
+    const membersById = new Map((memberRows || []).map((m: any) => [String(m.id), m]));
+    const accessByMemberId = new Map((accessRows || []).map((a: any) => [String(a.member_id), a]));
+
+    const finalEmails: RegisteredEmailRecord[] = (registryRows || []).map((row: any) => {
+      const member: any = membersById.get(String(row.member_id)) || {};
+      const access: any = accessByMemberId.get(String(row.member_id)) || {};
+      const isDisabled = row.is_enabled === false;
+      const isActivated = !isDisabled && Boolean(row.activated_at && member.auth_user_id);
+      const role: UserRole =
+        member.member_category === 'supervisor' || access.role === 'dpl'
+          ? 'dpl'
+          : access.role === 'chair' || member.position_title === 'Ketua'
+            ? 'ketua'
+            : 'member';
+      const systemRole: SystemRole =
+        row.system_role === 'super_admin'
+          ? 'super_admin'
+          : row.system_role === 'admin'
+            ? 'admin'
+            : 'user';
+
+      return {
+        id: String(row.id),
+        email: String(row.email || '').trim().toLowerCase(),
+        name: String(member.full_name || 'Anggota KKN'),
+        position: String(member.position_title || 'Anggota'),
+        division: String(member.division || 'Umum'),
+        role,
+        systemRole,
+        memberId: row.member_id ? String(row.member_id) : undefined,
+        registeredBy: row.registered_by ? 'Administrator KKN' : 'Sistem',
+        registeredAt: String(row.created_at || new Date().toISOString()),
+        status: isDisabled ? 'disabled' : isActivated ? 'activated' : 'pending_activation',
+        activatedUid: member.auth_user_id ? String(member.auth_user_id) : undefined,
+        activatedAt: row.activated_at || undefined,
+      };
     });
 
-    if (isSupabaseConfigured) {
-      try {
-        const { data: sbRows, error: sbErr } = await supabase
-          .from('registered_emails')
-          .select('*');
-
-        if (!sbErr && Array.isArray(sbRows) && sbRows.length > 0) {
-          sbRows.forEach((row) => {
-            if (isFabricatedLegacyRecord(row)) return;
-            const normalized = toAppRegisteredEmailRecord(row);
-            if (normalized.email) {
-              mergedMap.set(normalized.email.toLowerCase(), normalized);
-            }
-          });
-        }
-      } catch (err) {
-        console.warn('Supabase registered_emails fetch notice:', err);
-      }
-    }
-
-    try {
-      const res = await fetch('/api/admin/registered-emails');
-      if (res.ok) {
-        const data = await res.json();
-        const list = data.emails || data.registeredEmails || [];
-        if (Array.isArray(list) && list.length > 0) {
-          list.forEach((item: any) => {
-            if (isFabricatedLegacyRecord(item)) return;
-            const mapped = toAppRegisteredEmailRecord(item);
-            if (mapped.email) {
-              const key = mapped.email.toLowerCase();
-              const existing = mergedMap.get(key);
-              mergedMap.set(key, existing ? { ...mapped, ...existing } : mapped);
-            }
-          });
-        }
-      }
-    } catch {
-      // Fallback to local
-    }
-
-    const finalEmails = Array.from(mergedMap.values()).filter(
-      (r) => !isFabricatedLegacyRecord(r)
-    );
     setRegisteredEmails(finalEmails);
-    saveLocalRegisteredEmails(finalEmails);
     return finalEmails;
   };
 
   const fetchActivityLogs = async (): Promise<AdminActivityLogRecord[]> => {
-    let combined = [...adminLogs];
-    if (isSupabaseConfigured) {
-      try {
-        const { data: sbLogs, error: sbLogErr } = await supabase
-          .from('admin_activity_logs')
-          .select('*')
-          .order('timestamp', { ascending: false })
-          .limit(200);
-        if (!sbLogErr && Array.isArray(sbLogs) && sbLogs.length > 0) {
-          const mappedSbLogs: AdminActivityLog[] = sbLogs.map((l: any) => ({
-            id: String(l.id),
-            timestamp: String(l.timestamp || l.created_at || new Date().toISOString()),
-            adminEmail: String(l.admin_email || l.adminEmail || SUPER_ADMIN_EMAIL),
-            adminName: String(l.admin_name || l.adminName || 'Super Admin'),
-            actorEmail: String(l.admin_email || l.adminEmail || SUPER_ADMIN_EMAIL),
-            actorName: String(l.admin_name || l.adminName || 'Super Admin'),
-            action: (l.action || 'SYSTEM_SETTING_CHANGED') as AdminActivityLogRecord['action'],
-            target: String(l.target || '-'),
-            details: String(l.details || ''),
-            status: (l.status === 'warning' || l.status === 'error' ? l.status : 'success') as
-              | 'success'
-              | 'warning'
-              | 'error',
-            ip: l.ip,
-          }));
-          const logMap = new Map<string, AdminActivityLog>();
-          [...mappedSbLogs, ...combined].forEach((item) => logMap.set(item.id, item));
-          combined = Array.from(logMap.values());
-        }
-      } catch {
-        // Optional table
-      }
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase belum terkonfigurasi. Log aktivitas tidak dapat dimuat.');
     }
-
-    try {
-      const logsRes = await fetch('/api/admin/activity-logs');
-      if (logsRes.ok) {
-        const logsData = await logsRes.json();
-        const list = logsData.logs || [];
-        if (Array.isArray(list) && list.length > 0) {
-          const logMap = new Map<string, AdminActivityLog>();
-          [...combined, ...list].forEach((item: any) => logMap.set(item.id, item));
-          combined = Array.from(logMap.values());
-        }
-      }
-    } catch {
-      // Fallback to local logs
-    }
-
-    combined.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-    setAdminLogs(combined);
-    localStorage.setItem(ADMIN_LOGS_STORAGE_KEY, JSON.stringify(combined));
-    return combined;
+    const records = await listWorkspaceRecords<AdminActivityLog>('admin_logs');
+    records.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+    setAdminLogs(records);
+    return records;
   };
 
   /**
@@ -518,114 +361,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ): Promise<RegisteredEmailRecord | null> => {
     const cleanEmail = emailInput.trim().toLowerCase();
     if (!cleanEmail || isFabricatedLegacyRecord({ email: cleanEmail })) return null;
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase belum terkonfigurasi. Aktivasi akun tidak dapat dilanjutkan.');
+    }
 
-    // 1. If user is authenticated, query registered_emails table
-    const { data: sessionData } = await supabase.auth.getSession();
-    if (sessionData?.session?.user && isSupabaseConfigured) {
+    const { data, error } = await supabase.functions.invoke('check-member-email-registration', {
+      body: { email: cleanEmail, project_id: KKN_PROJECT_ID },
+    });
+    if (error) {
+      let detail = error.message;
       try {
-        const { data: sbRow, error: sbError } = await supabase
-          .from('registered_emails')
-          .select('*')
-          .ilike('email', cleanEmail)
-          .maybeSingle();
-
-        if (!sbError && sbRow && !isFabricatedLegacyRecord(sbRow)) {
-          const normalized = toAppRegisteredEmailRecord(sbRow);
-          if (normalized.status === 'revoked' || normalized.status === 'disabled') {
-            return null;
-          }
-          return normalized;
-        }
-      } catch (e) {
-        console.warn('Supabase registered_emails lookup notice:', e);
+        const body = await (error as any).context?.json();
+        if (body?.message || body?.error) detail = body.message || body.error;
+      } catch {}
+      throw new Error(detail || 'Gagal memeriksa registrasi email.');
+    }
+    if (!data?.success) {
+      throw new Error(data?.error || data?.message || 'Gagal memeriksa registrasi email.');
+    }
+    if (!data.eligible) {
+      const status = data.status || data.code;
+      if (status === 'not_registered' || status === 'unregistered_email') {
+        throw new Error('Email ini belum didaftarkan oleh Administrator KKN.');
       }
+      if (status === 'already_active' || status === 'existing_auth_account') {
+        throw new Error('Akun untuk email ini sudah aktif. Silakan masuk melalui tab Masuk Akun.');
+      }
+      if (status === 'confirmation_pending') {
+        throw new Error('Akun sudah dibuat tetapi email belum dikonfirmasi. Silakan kirim ulang email verifikasi atau periksa kotak masuk Anda.');
+      }
+      if (status === 'account_reconciliation_required') {
+        throw new Error('Email ini sudah memiliki akun Auth yang belum tertaut. Administrator harus menyinkronkan akun terlebih dahulu.');
+      }
+      if (status === 'disabled' || status === 'account_disabled') {
+        throw new Error('Akun ini telah dinonaktifkan oleh Administrator KKN.');
+      }
+      throw new Error(data.message || data.error || 'Email tidak memenuhi syarat aktivasi.');
     }
 
-    // 2. For unauthenticated activation checks, call secure server-side eligibility endpoint
-    try {
-      // First attempt Supabase Edge Function: check-activation-eligibility
-      let edgeRes: any = null;
-      if (isSupabaseConfigured) {
-        try {
-          const { data, error } = await supabase.functions.invoke('check-activation-eligibility', {
-            body: { email: cleanEmail },
-          });
-          if (!error && data) {
-            edgeRes = data;
-          }
-        } catch {}
-      }
-
-      // Fallback to local server proxy endpoint /api/auth/check-activation-eligibility
-      if (!edgeRes) {
-        const res = await fetch('/api/auth/check-activation-eligibility', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: cleanEmail }),
-        });
-        if (res.ok) {
-          edgeRes = await res.json();
-        }
-      }
-
-      if (edgeRes) {
-        if (!edgeRes.eligible) {
-          if (edgeRes.code === 'unregistered_email') {
-            throw new Error('Email ini belum didaftarkan oleh Administrator KKN.');
-          }
-          if (edgeRes.code === 'delivery_failed') {
-            throw new Error('Undangan belum dapat dikirim. Silakan hubungi Administrator KKN.');
-          }
-          if (edgeRes.code === 'existing_auth_account') {
-            throw new Error('Akun untuk email ini sudah aktif. Silakan masuk melalui tab "Masuk Akun" menggunakan email dan password Anda.');
-          }
-          if (edgeRes.code === 'account_disabled') {
-            throw new Error('Akun ini telah dinonaktifkan oleh Administrator KKN.');
-          }
-          throw new Error(edgeRes.message || edgeRes.error || 'Email tidak memenuhi syarat aktivasi.');
-        }
-
-        if (edgeRes.data) {
-          const d = edgeRes.data;
-          const rec: RegisteredEmailRecord = {
-            id: `reg-${d.member_id || sanitizeEmailId(cleanEmail)}`,
-            email: d.email || cleanEmail,
-            name: d.name || 'Anggota KKN',
-            position: d.position || 'Anggota',
-            division: d.division || 'Divisi Acara',
-            role: d.role || 'member',
-            systemRole: d.role === 'super_admin' ? 'super_admin' : d.role === 'admin' ? 'admin' : d.role === 'dpl' ? 'dpl' : 'user',
-            memberId: d.member_id,
-            status: 'pending_activation',
-            registeredBy: 'Administrator KKN',
-            registeredAt: new Date().toISOString(),
-          };
-          return rec;
-        }
-      }
-    } catch (checkErr: any) {
-      if (
-        checkErr?.message?.includes('belum didaftarkan') ||
-        checkErr?.message?.includes('belum dapat dikirim') ||
-        checkErr?.message?.includes('sudah aktif') ||
-        checkErr?.message?.includes('dinonaktifkan')
-      ) {
-        throw checkErr;
-      }
+    const d = data.data || {};
+    if (!d.member_id || !d.name || !d.position || !d.division) {
+      throw new Error('Data email terdaftar belum lengkap. Hubungi Administrator KKN.');
     }
-
-    // 3. Fallback to local store for offline/demo if available
-    const localList = getLocalRegisteredEmails();
-    const localFound = localList.find(
-      (item) => item.email.toLowerCase() === cleanEmail && !isFabricatedLegacyRecord(item)
-    );
-    if (localFound) {
-      return localFound.status === 'revoked' || localFound.status === 'disabled'
-        ? null
-        : localFound;
-    }
-
-    return null;
+    return {
+      id: String(d.registration_id || d.member_id),
+      email: String(d.email || cleanEmail).trim().toLowerCase(),
+      name: String(d.name),
+      position: String(d.position),
+      division: String(d.division),
+      role: d.role === 'dpl' ? 'dpl' : d.role === 'ketua' ? 'ketua' : 'member',
+      systemRole: d.system_role === 'super_admin' ? 'super_admin' : 'user',
+      memberId: String(d.member_id),
+      registeredBy: 'Administrator KKN',
+      registeredAt: String(d.registered_at || new Date().toISOString()),
+      status: 'pending_activation',
+    };
   };
 
   /**
@@ -641,150 +431,83 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ): Promise<UserProfile | null> => {
     const uid = sbUser.id;
     const cleanEmail = (sbUser.email || '').trim().toLowerCase();
-    if (!uid || !cleanEmail) return null;
+    if (!uid || !cleanEmail || !isSupabaseConfigured) return null;
 
-    // 1. Return immediately from memory cache if already resolved for this authenticated UID
     if (!forceRefresh && memoryProfileCache.has(uid)) {
       return memoryProfileCache.get(uid)!;
     }
-
-    // 2. Deduplicate concurrent calls (e.g., signInWithPassword + onAuthStateChange firing together)
     if (!forceRefresh && inflightProfileRequests.has(uid)) {
       return inflightProfileRequests.get(uid)!;
     }
 
     const loadPromise = (async (): Promise<UserProfile | null> => {
       try {
-        let authRow: Record<string, any> | null = null;
+        const { data: member, error: memberError } = await supabase
+          .from('members')
+          .select('id,project_id,full_name,position_title,division,member_category,status,auth_user_id')
+          .eq('project_id', KKN_PROJECT_ID)
+          .eq('auth_user_id', uid)
+          .maybeSingle();
 
-        // Execute a single optimized query to Supabase `registered_emails` (which holds profile, membership, and role)
-        if (isSupabaseConfigured) {
-          const { data, error } = await supabase
-            .from('registered_emails')
-            .select(
-              'id, email, name, position, division, role, system_role, member_id, status, activated_at'
-            )
-            .ilike('email', cleanEmail)
+        if (memberError) {
+          console.warn('Member profile lookup failed:', memberError.message);
+          return null;
+        }
+        if (!member || member.auth_user_id !== uid || member.status !== 'active') {
+          return null;
+        }
+
+        const { data: access, error: accessError } = await supabase
+          .from('member_access')
+          .select('role,is_active,user_id')
+          .eq('project_id', KKN_PROJECT_ID)
+          .eq('member_id', member.id)
+          .eq('user_id', uid)
+          .eq('is_active', true)
+          .maybeSingle();
+
+        if (accessError || !access || access.user_id !== uid) {
+          if (accessError) console.warn('Member access lookup failed:', accessError.message);
+          return null;
+        }
+
+        let adminRole: string | null = null;
+        try {
+          const { data: adminAccount } = await supabase
+            .from('admin_accounts')
+            .select('role,is_active')
+            .eq('user_id', uid)
             .maybeSingle();
-
-          if (!error && data) {
-            authRow = data;
-          } else {
-            // Fallback single query to `profiles` if `registered_emails` row wasn't returned
-            const { data: profileData } = await supabase
-              .from('profiles')
-              .select('*')
-              .or(`id.eq.${uid},email.ilike.${cleanEmail}`)
-              .maybeSingle();
-            if (profileData) {
-              authRow = profileData;
-            }
-          }
+          if (adminAccount?.is_active) adminRole = adminAccount.role;
+        } catch {
+          // Ordinary members are not allowed to read administrator records.
         }
 
-        const regRecord =
-          authRow && !isFabricatedLegacyRecord(authRow)
-            ? toAppRegisteredEmailRecord(authRow)
-            : getLocalRegisteredEmails().find(
-                (r) =>
-                  r.email.toLowerCase() === cleanEmail &&
-                  !isFabricatedLegacyRecord(r)
-              ) || null;
-
-        if (regRecord?.status === 'revoked' || regRecord?.status === 'disabled') {
-          return null;
-        }
-
-        const nowIso = new Date().toISOString();
-
-        // Preserve role separation: Super Admin abhyy333@gmail.com (Abdul Habir Al Majdi - Divisi Acara 1 + super_admin)
-        if (cleanEmail === SUPER_ADMIN_EMAIL) {
-          const targetMember = INITIAL_MEMBERS.find((m) => m.id === 'm-4');
-          const superAdminProfile: UserProfile = {
-            uid,
-            email: SUPER_ADMIN_EMAIL,
-            displayName: regRecord?.name || 'Abdul Habir Al Majdi',
-            role: 'member',
-            systemRole: 'super_admin',
-            position: regRecord?.position || 'Divisi Acara 1',
-            division: regRecord?.division || 'Divisi Acara',
-            invitationToken: 'KKN104-ACARA1-M4',
-            memberId: regRecord?.memberId || 'm-4',
-            accountStatus: 'active',
-            acceptedAt:
-              regRecord?.activatedAt || targetMember?.acceptedAt || nowIso,
-            emailVerified: true,
-          };
-          saveCachedProfile(uid, superAdminProfile);
-          return superAdminProfile;
-        }
-
-        // Preserve role separation: DPL ellymaelani@gmail.com (Lalu Muhammad Aby Dujana, M.Si. - Dosen Pembimbing Lapangan + dpl)
-        if (cleanEmail === 'ellymaelani@gmail.com') {
-          const dplProfile: UserProfile = {
-            uid,
-            email: 'ellymaelani@gmail.com',
-            displayName: regRecord?.name || 'Lalu Muhammad Aby Dujana, M.Si.',
-            role: 'dpl',
-            systemRole: 'dpl',
-            position: regRecord?.position || 'Dosen Pembimbing Lapangan',
-            division: 'DPL / Supervisi',
-            memberId: regRecord?.memberId || 'c7bf53d4-1c27-424e-992a-7c7c0f98707a',
-            accountStatus: 'active',
-            acceptedAt: regRecord?.activatedAt || nowIso,
-            emailVerified: true,
-          };
-          saveCachedProfile(uid, dplProfile);
-          return dplProfile;
-        }
-
-        // Reject if authenticated user is not authorized in database
-        if (!regRecord) {
-          return null;
-        }
-
-        const memberId =
-          regRecord.memberId ||
-          INITIAL_MEMBERS.find(
-            (m) =>
-              (regRecord.name &&
-                m.name.toLowerCase() === regRecord.name.toLowerCase()) ||
-              (regRecord.position &&
-                (m.position || m.role).toLowerCase() ===
-                  regRecord.position.toLowerCase())
-          )?.id;
-
-        const targetMember = memberId
-          ? INITIAL_MEMBERS.find((m) => m.id === memberId)
-          : undefined;
-
-        const resolvedRole: UserRole =
-          regRecord.role || (targetMember?.isLeader ? 'ketua' : 'member');
-
-        const resolvedSystemRole: SystemRole =
-          regRecord.systemRole ||
-          (resolvedRole === 'ketua' || resolvedRole === 'admin'
-            ? 'admin'
-            : 'user');
+        const appRole: UserRole =
+          member.member_category === 'supervisor' || access.role === 'dpl'
+            ? 'dpl'
+            : access.role === 'chair'
+              ? 'ketua'
+              : 'member';
+        const systemRole: SystemRole =
+          adminRole === 'super_admin'
+            ? 'super_admin'
+            : adminRole === 'admin'
+              ? 'admin'
+              : 'user';
 
         const resolvedProfile: UserProfile = {
           uid,
           email: cleanEmail,
-          displayName:
-            regRecord.name || targetMember?.name || cleanEmail.split('@')[0],
-          role: resolvedRole,
-          systemRole: resolvedSystemRole,
-          position:
-            regRecord.position ||
-            targetMember?.position ||
-            targetMember?.role ||
-            'Anggota KKN',
-          division: regRecord.division || targetMember?.division || 'Umum',
-          invitationToken: targetMember?.invitationToken,
-          memberId: memberId || targetMember?.id,
+          displayName: member.full_name,
+          role: appRole,
+          systemRole,
+          position: member.position_title,
+          division: member.division,
+          memberId: String(member.id),
           accountStatus: 'active',
-          acceptedAt: regRecord.activatedAt || nowIso,
-          emailVerified: true,
+          acceptedAt: new Date().toISOString(),
+          emailVerified: Boolean(sbUser.email_confirmed_at),
         };
 
         saveCachedProfile(uid, resolvedProfile);
@@ -803,54 +526,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * without creating duplicate member records.
    */
   const linkAccountOnInitialActivation = async (
-    sbUser: SupabaseUser,
-    resolvedProfile: UserProfile,
-    regRecord: RegisteredEmailRecord | null
-  ) => {
-    const cleanEmail = resolvedProfile.email.toLowerCase();
-    const uid = sbUser.id;
-    const acceptedAt = resolvedProfile.acceptedAt || new Date().toISOString();
-
-    if (isSupabaseConfigured) {
-      try {
-        await supabase
-          .from('registered_emails')
-          .update({
-            status: 'activated',
-            activated_uid: uid,
-            activated_at: acceptedAt,
-          })
-          .ilike('email', cleanEmail);
-      } catch {
-        // Handled by trigger or RLS
-      }
+    sbUser: SupabaseUser
+  ): Promise<UserProfile> => {
+    // The private.register_kkn_auth_user trigger links Auth UID, profile and project role.
+    // The client must never write authorization columns into registered_emails.
+    const refreshed = await resolveDatabaseProfileForUser(sbUser, true);
+    if (!refreshed) {
+      throw new Error('Akun Auth berhasil dibuat, tetapi profil anggota belum tertaut. Hubungi Administrator KKN sebelum mencoba login.');
     }
-
-    const updatedRecord: RegisteredEmailRecord = {
-      id: regRecord?.id || sanitizeEmailId(cleanEmail),
-      email: cleanEmail,
-      name: resolvedProfile.displayName,
-      position: resolvedProfile.position || 'Anggota KKN',
-      division: resolvedProfile.division || 'Umum',
-      role: resolvedProfile.role,
-      systemRole: resolvedProfile.systemRole || 'user',
-      memberId: resolvedProfile.memberId,
-      status: 'activated',
-      registeredBy: regRecord?.registeredBy || 'System Admin',
-      registeredAt: regRecord?.registeredAt || acceptedAt,
-      activatedUid: uid,
-      activatedAt: acceptedAt,
-    };
-
-    setRegisteredEmails((prev) => {
-      const next = prev.some((r) => r.email.toLowerCase() === cleanEmail)
-        ? prev.map((r) =>
-            r.email.toLowerCase() === cleanEmail ? updatedRecord : r
-          )
-        : [updatedRecord, ...prev];
-      saveLocalRegisteredEmails(next);
-      return next;
-    });
+    return refreshed;
   };
 
   // Supabase Auth Session Persistence, Instant Reuse & Token Refresh Listener
@@ -908,17 +592,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       hadActiveSessionRef.current = true;
       setSession(validSession);
 
-      // 3. Fast path: Hydrate immediately from cached profile for this authenticated UID so UI never blocks
-      const cachedProfile = getCachedProfile(sbUser.id, sbUser.email);
-      if (cachedProfile) {
-        setProfile(cachedProfile);
-        setUser(mapSupabaseUserToAppUser(sbUser, cachedProfile.displayName));
-        setLoading(false);
-      }
-
+      // Authorization is always reloaded from live members/member_access/admin_accounts rows.
       // 4. Resolve / verify authorization in a single deduplicated query
       try {
-        const resolvedProfile = await resolveDatabaseProfileForUser(sbUser);
+        const resolvedProfile = await resolveDatabaseProfileForUser(sbUser, true);
         if (!isMounted) return;
 
         if (!resolvedProfile) {
@@ -1000,127 +677,66 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ): Promise<ActivationResult> => {
     setAuthError(null);
     const cleanEmail = emailInput.trim().toLowerCase();
-
-    // WAJIB: Check email eligibility via check-member-email-registration Edge Function (with fallback to server proxy)
-    let eligibilityRes: any = null;
-    if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.functions.invoke('check-member-email-registration', {
-          body: { email: cleanEmail },
-        });
-        if (!error && data) {
-          eligibilityRes = data;
-        }
-      } catch {}
-    }
-
-    if (!eligibilityRes) {
-      try {
-        const res = await fetch('/api/auth/check-member-email-registration', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: cleanEmail }),
-        });
-        if (res.ok) {
-          eligibilityRes = await res.json();
-        }
-      } catch {}
-    }
-
-    if (eligibilityRes && !eligibilityRes.eligible) {
-      const code = eligibilityRes.code;
-      if (code === 'not_registered' || code === 'unregistered_email') {
-        throw new Error('Email belum didaftarkan oleh Administrator KKN.');
-      }
-      if (code === 'already_active' || code === 'existing_auth_account') {
-        throw new Error('Akun untuk email ini sudah aktif. Silakan masuk melalui tab Masuk Akun menggunakan email dan password Anda.');
-      }
-      if (code === 'confirmation_pending') {
-        throw new Error('Konfirmasi email masih tertunda. Silakan cek kotak masuk email Anda atau kirim ulang tautan verifikasi.');
-      }
-      if (code === 'account_reconciliation_required') {
-        throw new Error('Rekonsiliasi akun diperlukan. Silakan hubungi Administrator KKN.');
-      }
-      throw new Error(eligibilityRes.error || eligibilityRes.message || 'Email tidak memenuhi syarat aktivasi.');
-    }
+    if (pass.length < 8) throw new Error('Password minimal harus terdiri dari 8 karakter.');
 
     const record = await fetchAuthoritativeEmailRecord(cleanEmail);
-    if (!record || record.status === 'revoked') {
+    if (!record) {
       throw new Error('Email belum didaftarkan oleh Administrator KKN.');
     }
-
-    if (
-      record.status === 'activated' &&
-      record.activatedUid &&
-      cleanEmail !== SUPER_ADMIN_EMAIL
-    ) {
-      throw new Error(
-        'Akun untuk email ini sudah aktif. Silakan masuk melalui tab Masuk Akun menggunakan email dan password Anda.'
-      );
+    if (record.status === 'activated' && record.activatedUid) {
+      throw new Error('Akun untuk email ini sudah aktif. Silakan masuk melalui tab Masuk Akun.');
     }
-
     if (!isSupabaseConfigured) {
-      throw new Error(
-        'Konfigurasi Supabase belum lengkap. Pastikan VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY sudah diatur pada environment project.'
-      );
+      throw new Error('Konfigurasi Supabase belum lengkap. Periksa VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY.');
     }
 
-    const { data: signUpData, error: signUpError } = await supabase.auth.signUp(
-      {
-        email: cleanEmail,
-        password: pass,
-        options: {
-          emailRedirectTo: `${window.location.origin}/workspace`,
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password: pass,
+      options: {
+        data: {
+          full_name: record.name,
+          member_id: record.memberId,
+          project_id: KKN_PROJECT_ID,
         },
-      }
-    );
+        emailRedirectTo: new URL('/workspace', window.location.origin).toString(),
+      },
+    });
 
     if (signUpError) {
       const msg = signUpError.message.toLowerCase();
-      if (
-        msg.includes('already registered') ||
-        msg.includes('user already exists')
-      ) {
-        throw new Error(
-          'Akun dengan email ini sudah terdaftar di Supabase Auth. Silakan langsung masuk melalui tab Masuk Akun.'
-        );
+      if (msg.includes('already registered') || msg.includes('user already exists') || msg.includes('already been registered')) {
+        throw new Error('Akun untuk email ini sudah dibuat. Gunakan Masuk Akun atau kirim ulang verifikasi email.');
+      }
+      if (msg.includes('database error saving new user') || msg.includes('email is not registered')) {
+        throw new Error('Supabase menolak pembuatan akun karena data registrasi email belum tersimpan/terhubung dengan anggota. Muat ulang halaman Admin Console dan pastikan email tampil di Email Registration.');
       }
       if (msg.includes('password')) {
         throw new Error('Password minimal harus terdiri dari 8 karakter.');
       }
       if (msg.includes('rate limit') || msg.includes('security purposes')) {
-        throw new Error(
-          'Terlalu banyak permintaan pengiriman email. Silakan tunggu beberapa saat atau cek kotak masuk email Anda.'
-        );
+        throw new Error('Terlalu banyak permintaan email verifikasi. Tunggu sebentar sebelum mencoba lagi.');
       }
-      throw new Error(
-        signUpError.message || 'Gagal melakukan registrasi akun.'
-      );
+      if (msg.includes('email') && (msg.includes('smtp') || msg.includes('sending'))) {
+        throw new Error('Akun belum dapat diaktifkan karena layanan email Supabase gagal mengirim verifikasi. Pendaftaran tetap tercatat; periksa konfigurasi SMTP Supabase.');
+      }
+      throw new Error(signUpError.message || 'Gagal melakukan registrasi akun.');
     }
 
     const sbUser = signUpData.user;
-    if (!sbUser) {
-      throw new Error('Gagal membuat akun pengguna di Supabase.');
-    }
-
+    if (!sbUser) throw new Error('Supabase tidak mengembalikan akun pengguna.');
     if (Array.isArray(sbUser.identities) && sbUser.identities.length === 0) {
-      throw new Error(
-        'Akun dengan email ini sudah terdaftar dan aktif. Silakan masuk melalui tab Masuk Akun.'
-      );
+      throw new Error('Akun untuk email ini sudah dibuat. Gunakan Masuk Akun atau kirim ulang verifikasi email.');
     }
 
     const isEmailVerified = Boolean(sbUser.email_confirmed_at);
     const acceptedAt = new Date().toISOString();
-
     const previewProfile: UserProfile = {
       uid: sbUser.id,
       email: cleanEmail,
       displayName: record.name,
-      role: cleanEmail === SUPER_ADMIN_EMAIL ? 'member' : record.role || 'member',
-      systemRole:
-        cleanEmail === SUPER_ADMIN_EMAIL
-          ? 'super_admin'
-          : record.systemRole || 'user',
+      role: record.role || 'member',
+      systemRole: record.systemRole || 'user',
       position: record.position,
       division: record.division,
       memberId: record.memberId,
@@ -1129,7 +745,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       emailVerified: isEmailVerified,
     };
 
-    // Require email verification ONLY during initial account activation
     if (!isEmailVerified) {
       if (signUpData.session) {
         isManualSignOutRef.current = true;
@@ -1138,30 +753,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(null);
       setUser(null);
       setProfile(null);
-
-      return {
-        needsEmailVerification: true,
-        email: cleanEmail,
-        profile: previewProfile,
-      };
+      return { needsEmailVerification: true, email: cleanEmail, profile: previewProfile };
     }
 
-    const resolvedProfile =
-      (await resolveDatabaseProfileForUser(sbUser, true)) || previewProfile;
-    await linkAccountOnInitialActivation(sbUser, resolvedProfile, record);
-
-    if (signUpData.session) {
-      hadActiveSessionRef.current = true;
-      setSession(signUpData.session);
-      setProfile(resolvedProfile);
-      setUser(mapSupabaseUserToAppUser(sbUser, resolvedProfile.displayName));
+    const resolvedProfile = await linkAccountOnInitialActivation(sbUser);
+    if (!signUpData.session) {
+      // A confirmed signup without a session must be verified via the regular login flow.
+      return { needsEmailVerification: false, email: cleanEmail, profile: resolvedProfile };
     }
 
-    return {
-      needsEmailVerification: false,
-      email: cleanEmail,
-      profile: resolvedProfile,
-    };
+    hadActiveSessionRef.current = true;
+    setSession(signUpData.session);
+    setProfile(resolvedProfile);
+    setUser(mapSupabaseUserToAppUser(sbUser, resolvedProfile.displayName));
+    return { needsEmailVerification: false, email: cleanEmail, profile: resolvedProfile };
   };
 
   /**
@@ -1394,8 +999,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     target: string,
     details: string
   ) => {
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase belum terkonfigurasi. Log aktivitas tidak dapat disimpan.');
+    }
     const newLog: AdminActivityLog = {
-      id: `log-${Date.now()}`,
+      id: crypto.randomUUID(),
       action: action as AdminActivityLogRecord['action'],
       target,
       adminEmail: user?.email || SUPER_ADMIN_EMAIL,
@@ -1406,207 +1014,111 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       details,
       status: 'success',
     };
-
-    const nextLogs = [newLog, ...adminLogs];
-    setAdminLogs(nextLogs);
-    localStorage.setItem(ADMIN_LOGS_STORAGE_KEY, JSON.stringify(nextLogs));
-
-    if (isSupabaseConfigured) {
-      try {
-        await supabase.from('admin_activity_logs').insert({
-          id: newLog.id,
-          action: newLog.action,
-          target: newLog.target,
-          admin_email: newLog.adminEmail,
-          admin_name: newLog.adminName,
-          timestamp: newLog.timestamp,
-          details: newLog.details,
-          status: newLog.status,
-        });
-      } catch {
-        // Optional table
-      }
-    }
+    await upsertWorkspaceRecord('admin_logs', newLog);
+    setAdminLogs((prev) => [newLog, ...prev]);
   };
 
   const registerMemberEmail = async (
     nameOrRecord:
       | string
-      | Omit<
-          RegisteredEmailRecord,
-          'id' | 'status' | 'registeredAt' | 'registeredBy'
-        >,
+      | Omit<RegisteredEmailRecord, 'id' | 'status' | 'registeredAt' | 'registeredBy'>,
     emailArg?: string,
     positionArg?: string,
     divisionArg?: string,
     memberIdArg?: string
   ): Promise<RegisteredEmailRecord> => {
-    const inputObj =
-      typeof nameOrRecord === 'string'
-        ? {
-            name: nameOrRecord,
-            email: emailArg || '',
-            position: positionArg || 'Anggota KKN',
-            division: divisionArg || 'Divisi Acara',
-            memberId: memberIdArg,
-            role: 'member' as UserRole,
-            systemRole: 'user' as SystemRole,
-          }
-        : nameOrRecord;
+    if (!isSupabaseConfigured) throw new Error('Supabase belum terkonfigurasi.');
+    if (!user?.uid || !user.email) throw new Error('Sesi Admin tidak valid. Silakan login ulang.');
+
+    const inputObj = typeof nameOrRecord === 'string'
+      ? {
+          name: nameOrRecord,
+          email: emailArg || '',
+          position: positionArg || 'Anggota KKN',
+          division: divisionArg || 'Divisi Acara',
+          memberId: memberIdArg,
+          role: 'member' as UserRole,
+          systemRole: 'user' as SystemRole,
+        }
+      : nameOrRecord;
 
     const cleanEmail = inputObj.email.trim().toLowerCase();
-    const newRecord: RegisteredEmailRecord = {
-      id: sanitizeEmailId(cleanEmail),
-      email: cleanEmail,
-      name: inputObj.name,
-      position: inputObj.position,
-      division: inputObj.division,
-      role: inputObj.role || 'member',
-      systemRole: inputObj.systemRole || 'user',
-      memberId: inputObj.memberId,
-      status: 'pending_activation',
-      registeredBy: user?.email || SUPER_ADMIN_EMAIL,
-      registeredAt: new Date().toISOString(),
-    };
+    const memberId = String(inputObj.memberId || '').trim();
+    if (!memberId) throw new Error('ID anggota database tidak ditemukan. Muat ulang daftar anggota sebelum mendaftarkan email.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) throw new Error('Format alamat email tidak valid.');
 
-    if (isSupabaseConfigured) {
+    const { data, error } = await supabase.functions.invoke('admin-register-member-email', {
+      body: {
+        project_id: KKN_PROJECT_ID,
+        member_id: memberId,
+        email: cleanEmail,
+        confirm_member_name: inputObj.name.trim(),
+        reason: 'Pendaftaran email melalui Admin Console',
+      },
+    });
+
+    if (error) {
+      let detail = error.message;
       try {
-        await supabase.from('registered_emails').upsert(
-          {
-            email: cleanEmail,
-            name: newRecord.name,
-            position: newRecord.position,
-            division: newRecord.division,
-            role: newRecord.role,
-            system_role: newRecord.systemRole,
-            member_id: newRecord.memberId || null,
-            status: 'pending',
-            registered_by: newRecord.registeredBy,
-            registered_at: newRecord.registeredAt,
-          },
-          { onConflict: 'email' }
-        );
-      } catch (e) {
-        console.warn('Supabase registered_emails upsert warning:', e);
-      }
+        const body = await (error as any).context?.json();
+        if (body?.error || body?.message) detail = body.error || body.message;
+      } catch {}
+      throw new Error(detail || 'Gagal menyimpan registrasi email ke Supabase.');
     }
+    if (!data?.success) throw new Error(data?.error || 'Registrasi email gagal disimpan.');
 
-    const updated = [
-      newRecord,
-      ...registeredEmails.filter((r) => r.email.toLowerCase() !== cleanEmail),
-    ];
-    setRegisteredEmails(updated);
-    saveLocalRegisteredEmails(updated);
+    const refreshed = await fetchRegisteredEmails();
+    const saved = refreshed.find((r) => r.email.toLowerCase() === cleanEmail && r.memberId === memberId);
+    if (saved) return saved;
 
-    try {
-      await fetch('/api/admin/register-member', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...newRecord,
-          adminEmail: user?.email || SUPER_ADMIN_EMAIL,
-          adminName: profile?.displayName || 'Abdul Habir Al Majdi',
-        }),
-      });
-    } catch {
-      // Fallback
-    }
-
-    return newRecord;
+    return {
+      id: String(data.registration_id || memberId),
+      email: cleanEmail,
+      name: String(data.name || inputObj.name),
+      position: String(data.position || inputObj.position),
+      division: String(data.division || inputObj.division),
+      role: data.role === 'dpl' ? 'dpl' : data.role === 'ketua' ? 'ketua' : 'member',
+      systemRole: 'user',
+      memberId,
+      registeredBy: user.email,
+      registeredAt: String(data.registered_at || new Date().toISOString()),
+      status: 'pending_activation',
+    };
   };
 
   const updateRegisteredEmail = async (
-    emailInput: string,
+    emailOrId: string,
     updates: Partial<RegisteredEmailRecord>
   ) => {
-    const cleanOldEmail = emailInput.trim().toLowerCase();
-    const cleanNewEmail = updates.email
-      ? updates.email.trim().toLowerCase()
-      : cleanOldEmail;
+    if (!isSupabaseConfigured || !user?.uid) throw new Error('Sesi Admin tidak valid.');
+    const current = registeredEmails.find(
+      (item) => item.id === emailOrId || item.email.toLowerCase() === emailOrId.trim().toLowerCase()
+    );
+    if (!current?.memberId) throw new Error('Data email anggota tidak ditemukan di registry Supabase.');
+    const newEmail = String(updates.email || current.email).trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) throw new Error('Format email baru tidak valid.');
 
-    if (
-      cleanOldEmail === SUPER_ADMIN_EMAIL &&
-      (updates.status === 'disabled' ||
-        updates.status === 'revoked' ||
-        (updates.systemRole && updates.systemRole !== 'super_admin'))
-    ) {
-      throw new Error(
-        'Akun Super Admin utama (abhyy333@gmail.com) tidak dapat dinonaktifkan atau diturunkan hak aksesnya.'
-      );
-    }
-
-    if (isSupabaseConfigured) {
+    const { data, error } = await supabase.functions.invoke('admin-reset-member-email', {
+      body: {
+        project_id: KKN_PROJECT_ID,
+        member_id: current.memberId,
+        action: 'replace',
+        new_email: newEmail,
+        confirm_member_name: current.name,
+        reason: 'Penggantian email melalui Admin Console',
+      },
+    });
+    if (error) {
+      let detail = error.message;
       try {
-        const sbUpdates: Record<string, any> = {};
-        if (cleanNewEmail !== cleanOldEmail) sbUpdates.email = cleanNewEmail;
-        if (updates.name !== undefined) sbUpdates.name = updates.name;
-        if (updates.position !== undefined) sbUpdates.position = updates.position;
-        if (updates.division !== undefined) sbUpdates.division = updates.division;
-        if (updates.role !== undefined) sbUpdates.role = updates.role;
-        if (updates.systemRole !== undefined)
-          sbUpdates.system_role = updates.systemRole;
-        if (updates.status !== undefined) sbUpdates.status = updates.status;
-        if (updates.memberId !== undefined) sbUpdates.member_id = updates.memberId;
-
-        await supabase
-          .from('registered_emails')
-          .update(sbUpdates)
-          .ilike('email', cleanOldEmail);
-
-        if (updates.memberId || cleanNewEmail !== cleanOldEmail) {
-          await supabase
-            .from('member_access')
-            .upsert(
-              {
-                email: cleanNewEmail,
-                member_id: updates.memberId || null,
-                role: updates.role || 'member',
-                system_role: updates.systemRole || 'user',
-                is_active:
-                  updates.status !== 'disabled' && updates.status !== 'revoked',
-                status: updates.status || 'pending_activation',
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: 'email' }
-            );
-        }
-      } catch (e) {
-        console.warn('Supabase updateRegisteredEmail warning:', e);
-      }
+        const body = await (error as any).context?.json();
+        if (body?.error || body?.message) detail = body.error || body.message;
+      } catch {}
+      throw new Error(detail || 'Gagal mengganti email anggota.');
     }
-
-    try {
-      await fetch('/api/admin/update-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          adminEmail: user?.email || SUPER_ADMIN_EMAIL,
-          oldEmail: cleanOldEmail,
-          updates: { ...updates, email: cleanNewEmail },
-        }),
-      });
-    } catch {
-      // Fallback
-    }
-
-    const updatedList = registeredEmails.map((r) =>
-      r.email.toLowerCase() === cleanOldEmail
-        ? {
-            ...r,
-            ...updates,
-            email: cleanNewEmail,
-            id: sanitizeEmailId(cleanNewEmail),
-          }
-        : r
-    );
-    setRegisteredEmails(updatedList);
-    saveLocalRegisteredEmails(updatedList);
-
-    await logAdminActivity(
-      'UPDATE_REGISTERED_EMAIL',
-      cleanNewEmail,
-      `Memperbarui data registrasi email/akses untuk ${cleanNewEmail}`
-    );
+    if (!data?.success) throw new Error(data?.error || 'Penggantian email gagal.');
+    await fetchRegisteredEmails();
+    await logAdminActivity('UPDATE_REGISTERED_EMAIL', newEmail, `Email login ${current.name} diperbarui dan aktivasi harus diulang.`);
   };
 
   const revokeRegisteredEmail = async (emailInput: string) => {
@@ -1749,7 +1261,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         : r
     );
     setRegisteredEmails(updatedList);
-    saveLocalRegisteredEmails(updatedList);
 
     await logAdminActivity(
       'DISABLE_ACCOUNT',
@@ -1858,7 +1369,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         : r
     );
     setRegisteredEmails(updatedList);
-    saveLocalRegisteredEmails(updatedList);
 
     await logAdminActivity(
       'RESTORE_ACCOUNT',
@@ -1872,115 +1382,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * the member's historical tasks, meetings, surveys, and other records.
    */
   const deleteMemberAccount = async (emailOrMemberId: string) => {
+    if (!isSupabaseConfigured || !user?.uid) {
+      throw new Error('Sesi Admin tidak valid. Silakan login ulang.');
+    }
+
     const key = emailOrMemberId.trim().toLowerCase();
     const targetRec = registeredEmails.find(
-      (r) =>
-        r.email.toLowerCase() === key ||
-        (r.memberId && r.memberId.toLowerCase() === key)
+      (r) => r.email.toLowerCase() === key || r.memberId === emailOrMemberId
     );
-
-    const targetEmail = (targetRec?.email || key).toLowerCase();
-    const targetUid = targetRec?.activatedUid;
-    const targetMemberId = targetRec?.memberId;
-
-    // Self-protection & last super_admin guard
+    if (!targetRec?.memberId) {
+      throw new Error('Registrasi email anggota tidak ditemukan pada database.');
+    }
     if (
-      targetEmail === SUPER_ADMIN_EMAIL ||
-      targetMemberId === 'm-4' ||
-      (user?.email && targetEmail === user.email.toLowerCase()) ||
-      (user?.uid && targetUid && targetUid === user.uid)
+      targetRec.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+      targetRec.systemRole === 'super_admin' ||
+      targetRec.activatedUid === user.uid
     ) {
-      throw new Error(
-        'Proteksi Keamanan: Akun Super Admin utama atau akun yang sedang login tidak dapat dihapus.'
-      );
+      throw new Error('Akun Super Admin utama atau akun yang sedang digunakan tidak dapat dihapus.');
     }
 
-    const activeSuperAdmins = registeredEmails.filter(
-      (r) => r.systemRole === 'super_admin'
-    );
-    if (
-      targetRec?.systemRole === 'super_admin' &&
-      activeSuperAdmins.length <= 1
-    ) {
-      throw new Error(
-        'Proteksi Keamanan: Tidak dapat menghapus satu-satunya Super Admin yang tersisa.'
-      );
-    }
+    const { data, error } = await supabase.functions.invoke('admin-reset-member-email', {
+      body: {
+        project_id: KKN_PROJECT_ID,
+        member_id: targetRec.memberId,
+        action: 'remove',
+        confirm_member_name: targetRec.name,
+        reason: 'Penghapusan registrasi email melalui Admin Console',
+      },
+    });
 
-    if (isSupabaseConfigured) {
+    if (error) {
+      let detail = error.message;
       try {
-        // 1. Delete Auth user via Supabase Edge Function (uses Supabase Admin API server-side)
-        await supabase.functions
-          .invoke('admin-manage-account', {
-            body: {
-              action: 'delete',
-              email: targetEmail,
-              uid: targetUid,
-              memberId: targetMemberId,
-            },
-          })
-          .catch(() => {});
-
-        // 2. Remove email registration & member_access rows
-        if (targetEmail.includes('@')) {
-          await supabase
-            .from('registered_emails')
-            .delete()
-            .ilike('email', targetEmail);
-
-          await supabase
-            .from('member_access')
-            .delete()
-            .ilike('email', targetEmail);
-        }
-
-        // 3. Unlink Auth account from member record while preserving the member and all historical records
-        if (targetMemberId) {
-          await supabase
-            .from('members')
-            .update({
-              email: '',
-              registered_email: '',
-              account_status: 'unregistered',
-              accountStatus: 'unregistered',
-              auth_uid: null,
-              authUid: null,
-            })
-            .eq('id', targetMemberId);
-        }
-      } catch (e) {
-        console.warn('Supabase deleteMemberAccount notice:', e);
-      }
+        const body = await (error as any).context?.json();
+        if (body?.error || body?.message) detail = body.error || body.message;
+      } catch {}
+      throw new Error(detail || 'Gagal menghapus email dan akun login anggota.');
     }
+    if (!data?.success) throw new Error(data?.error || 'Penghapusan email anggota gagal.');
 
-    try {
-      await fetch('/api/admin/account-action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'delete',
-          adminEmail: user?.email || SUPER_ADMIN_EMAIL,
-          email: targetEmail,
-          uid: targetUid,
-          memberId: targetMemberId,
-        }),
-      });
-    } catch {
-      // Non-fatal
-    }
-
-    const updatedList = registeredEmails.filter(
-      (r) =>
-        r.email.toLowerCase() !== targetEmail &&
-        (!targetMemberId || r.memberId !== targetMemberId)
-    );
-    setRegisteredEmails(updatedList);
-    saveLocalRegisteredEmails(updatedList);
-
+    await fetchRegisteredEmails();
     await logAdminActivity(
       'DELETE_AUTH_ACCOUNT',
-      `${targetRec?.name || targetEmail} (${targetEmail})`,
-      'Akun autentikasi & registrasi email dihapus permanen melalui Admin API. Seluruh riwayat tugas, rapat, dan survei anggota tetap dipertahankan.'
+      `${targetRec.name} (${targetRec.email})`,
+      'Email login dan akun Auth dihapus. Profil anggota serta riwayat kontribusi dipertahankan.'
     );
   };
 
@@ -2107,7 +1552,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               }
             : r
         );
-        saveLocalRegisteredEmails(next);
         return next;
       });
     }

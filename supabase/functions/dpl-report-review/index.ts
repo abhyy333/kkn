@@ -1,209 +1,246 @@
 // @ts-nocheck
-// =============================================================================
-// SUPABASE EDGE FUNCTION: dpl-report-review
-// Project: scslevzuxxkfcuvwbtty
-// Description:
-//   Trusted server-side Edge Function for DPL Report Reviews:
-//   - Validates supervisor (DPL) or Super Admin credentials.
-//   - Updates report_submissions status ('approved', 'revision_requested', 'rejected').
-//   - Stores evaluation feedback in report_submissions and logs history in report_reviews.
-//   - Creates audit trail entries in admin_activity_logs.
-// =============================================================================
+import { createClient } from "npm:@supabase/supabase-js@2";
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
-import { handleCorsPreflight, getCorsHeaders, isAllowedOrigin } from '../_shared/cors.ts';
+const PROJECT_ID = "f5dcc382-8cc9-465a-b919-e58d6a688eea";
+const ALLOWED_ORIGINS = new Set([
+  "https://kkn-beta.vercel.app",
+  "https://kkn.vercel.app",
+  "https://kkn-space.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:3000",
+]);
 
-interface ReviewPayload {
-  report_id: string;
-  decision: 'approved' | 'revision_requested' | 'rejected';
-  feedback: string;
+function isAllowedOrigin(origin: string | null): boolean {
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(origin)) return true;
+  return /^https:\/\/kkn(-[a-z0-9-]+)?\.vercel\.app$/.test(origin)
+    || /^https:\/\/kkn-space(-[a-z0-9-]+)?\.vercel\.app$/.test(origin);
+}
+
+function readKey(name: string, legacyName?: string): string | null {
+  const raw = Deno.env.get(name);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      const value = parsed?.default ?? Object.values(parsed ?? {})[0];
+      if (typeof value === "string") return value;
+    } catch {
+      // Legacy single-key env fallback.
+    }
+  }
+  return legacyName ? Deno.env.get(legacyName) ?? null : null;
+}
+
+function json(body: Record<string, unknown>, status: number, origin: string | null) {
+  const allowedOrigin = origin && isAllowedOrigin(origin)
+    ? origin
+    : "https://kkn-beta.vercel.app";
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "Access-Control-Allow-Origin": allowedOrigin,
+      "Access-Control-Allow-Headers": "authorization, apikey, x-client-info, content-type",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Cache-Control": "no-store",
+      "Vary": "Origin",
+      "Content-Type": "application/json",
+    },
+  });
 }
 
 Deno.serve(async (req: Request) => {
-  const origin = req.headers.get('Origin') || req.headers.get('origin');
+  const origin = req.headers.get("origin");
+  if (req.method === "OPTIONS") {
+    if (origin && !isAllowedOrigin(origin)) return json({ error: "Origin not allowed" }, 403, origin);
+    return new Response("ok", { status: 200, headers: {
+      "Access-Control-Allow-Origin": origin || "https://kkn-beta.vercel.app",
+      "Access-Control-Allow-Headers": "authorization, apikey, x-client-info, content-type",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Vary": "Origin",
+    }});
+  }
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405, origin);
+  if (origin && !isAllowedOrigin(origin)) return json({ error: "Origin not allowed" }, 403, origin);
 
-  if (req.method === 'OPTIONS') {
-    return handleCorsPreflight(req);
+  const authorization = req.headers.get("authorization");
+  if (!authorization?.startsWith("Bearer ")) {
+    return json({ error: "Authentication required" }, 401, origin);
   }
 
-  if (origin && !isAllowedOrigin(origin)) {
-    return new Response(
-      JSON.stringify({ error: `Forbidden: Origin '${origin}' is not allowed by CORS policy.` }),
-      {
-        status: 403,
-        headers: {
-          'Content-Type': 'application/json',
-          'Vary': 'Origin',
-        },
-      }
-    );
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const publishableKey = readKey("SUPABASE_PUBLISHABLE_KEYS", "SUPABASE_ANON_KEY");
+  const secretKey = readKey("SUPABASE_SECRET_KEYS", "SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !publishableKey || !secretKey) {
+    console.error("DPL review function environment is incomplete");
+    return json({ error: "Server configuration is incomplete" }, 500, origin);
   }
 
-  const corsHeaders = getCorsHeaders(origin);
+  const userClient = createClient(supabaseUrl, publishableKey, {
+    global: { headers: { Authorization: authorization } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const adminClient = createClient(supabaseUrl, secretKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-    const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
-      return new Response(
-        JSON.stringify({ error: 'Server configuration missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    const { data: authData, error: authError } = await userClient.auth.getUser();
+    const user = authData?.user;
+    if (authError || !user?.id || !user.email || !user.email_confirmed_at) {
+      return json({ error: "A verified signed-in account is required" }, 401, origin);
     }
 
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: 'Missing Authorization header.' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    let payload: { report_id?: string; decision?: string; feedback?: string };
+    try {
+      payload = await req.json();
+    } catch {
+      return json({ error: "Invalid JSON request body" }, 400, origin);
     }
 
-    // 1. Verify caller identity using caller JWT
-    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    const { data: userData, error: userErr } = await userClient.auth.getUser();
-    if (userErr || !userData?.user?.email) {
-      return new Response(
-        JSON.stringify({ error: 'Unauthorized session.' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    const reportId = payload.report_id?.trim();
+    const decision = payload.decision?.trim();
+    const feedback = payload.feedback?.trim() ?? "";
+    if (!reportId || !decision) {
+      return json({ error: "report_id and decision are required" }, 400, origin);
+    }
+    if (!["approved", "revision_requested", "rejected"].includes(decision)) {
+      return json({ error: "Invalid review decision" }, 400, origin);
+    }
+    if ((decision === "revision_requested" || decision === "rejected") && !feedback) {
+      return json({ error: "A review note is required for revision requests or rejection" }, 400, origin);
     }
 
-    const callerEmail = userData.user.email.trim().toLowerCase();
-    const callerUid = userData.user.id;
+    const [{ data: dplAccess, error: accessError }, { data: allowlist, error: allowlistError }] = await Promise.all([
+      adminClient.from("member_access")
+        .select("member_id")
+        .eq("project_id", PROJECT_ID)
+        .eq("user_id", user.id)
+        .eq("role", "dpl")
+        .eq("is_active", true)
+        .maybeSingle(),
+      adminClient.from("registered_emails")
+        .select("id,member_id")
+        .eq("project_id", PROJECT_ID)
+        .eq("email", user.email.toLowerCase())
+        .eq("is_enabled", true)
+        .maybeSingle(),
+    ]);
 
-    // 2. Initialize Admin Client with Service Role Key
-    const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
+    if (accessError || allowlistError) {
+      console.error("DPL authorization lookup failed", accessError?.code || allowlistError?.code);
+      return json({ error: "Unable to verify supervisor authorization" }, 500, origin);
+    }
+    if (!dplAccess?.member_id || allowlist?.member_id !== dplAccess.member_id) {
+      return json({ error: "Only the registered project DPL can review reports" }, 403, origin);
+    }
 
-    // Verify caller is DPL or Super Admin
-    let isAuthorizedEvaluator = callerEmail === 'abhyy333@gmail.com' || callerEmail.includes('dpl') || callerEmail.includes('dosen');
-    
-    if (!isAuthorizedEvaluator) {
-      // Check admin_accounts or member_access
-      const { data: adminRow } = await adminClient
-        .from('admin_accounts')
-        .select('role')
-        .or(`auth_user_id.eq.${callerUid},user_id.eq.${callerUid},email.ilike.${callerEmail}`)
-        .maybeSingle();
+    const { data: supervisor, error: supervisorError } = await adminClient
+      .from("members")
+      .select("id,full_name,member_category")
+      .eq("id", dplAccess.member_id)
+      .eq("project_id", PROJECT_ID)
+      .maybeSingle();
 
-      if (adminRow) {
-        isAuthorizedEvaluator = true;
-      } else {
-        const { data: accessRow } = await adminClient
-          .from('member_access')
-          .select('role')
-          .or(`auth_user_id.eq.${callerUid},email.ilike.${callerEmail}`)
-          .maybeSingle();
+    if (supervisorError || supervisor?.member_category !== "supervisor") {
+      return json({ error: "This account is not registered as the project's DPL" }, 403, origin);
+    }
 
-        if (accessRow && (accessRow.role === 'dpl' || accessRow.role === 'super_admin' || accessRow.role === 'admin')) {
-          isAuthorizedEvaluator = true;
-        }
+    const [{ data: normalizedReport, error: normalizedError }, { data: workspaceRecord, error: workspaceError }] = await Promise.all([
+      adminClient.from("report_submissions")
+        .select("id,project_id,status")
+        .eq("id", reportId)
+        .eq("project_id", PROJECT_ID)
+        .maybeSingle(),
+      adminClient.from("kkn_workspace_records")
+        .select("id,project_id,record_key,payload")
+        .eq("project_id", PROJECT_ID)
+        .eq("module_key", "reports")
+        .eq("record_key", reportId)
+        .maybeSingle(),
+    ]);
+
+    if (normalizedError || workspaceError) {
+      console.error("Report lookup failed", normalizedError?.code || workspaceError?.code);
+      return json({ error: "Unable to load the selected report" }, 500, origin);
+    }
+    if (!normalizedReport && !workspaceRecord) {
+      return json({ error: "Report not found" }, 404, origin);
+    }
+
+    if (normalizedReport && normalizedReport.status !== "submitted") {
+      return json({ error: "Only submitted normalized reports can be reviewed" }, 409, origin);
+    }
+
+    if (workspaceRecord) {
+      const currentPayload = workspaceRecord.payload || {};
+      const currentStatus = String(currentPayload.status || "");
+      if (!["submitted", "resubmitted", "under_review"].includes(currentStatus)) {
+        return json({ error: "Only submitted workspace reports can be reviewed" }, 409, origin);
       }
     }
 
-    // Allow evaluator
-    if (!isAuthorizedEvaluator) {
-      // Default to allowed for authenticated users during DPL workspace operations
-      isAuthorizedEvaluator = true;
-    }
-
-    const body = (await req.json()) as ReviewPayload;
-    const { report_id, decision, feedback } = body;
-
-    if (!report_id || !decision) {
-      return new Response(
-        JSON.stringify({ error: 'Parameter report_id dan decision wajib diisi.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    if (decision !== 'approved' && decision !== 'revision_requested' && decision !== 'rejected') {
-      return new Response(
-        JSON.stringify({ error: 'Decision harus bernilai "approved", "revision_requested", atau "rejected".' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    if ((decision === 'revision_requested' || decision === 'rejected') && (!feedback || !feedback.trim())) {
-      return new Response(
-        JSON.stringify({ error: 'Catatan arahan evaluasi wajib diisi untuk permintaan revisi atau penolakan.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const nowIso = new Date().toISOString();
-    const mappedStatus =
-      decision === 'approved'
-        ? 'approved_by_dpl'
-        : decision === 'revision_requested'
-        ? 'revision_requested'
-        : 'rejected';
-
-    // Update report_submissions table
-    const { error: updateErr } = await adminClient
-      .from('report_submissions')
-      .update({
-        status: mappedStatus,
-        dpl_notes: feedback?.trim() || null,
-        updated_at: nowIso,
-      })
-      .eq('id', report_id);
-
-    if (updateErr) {
-      console.warn('report_submissions update warning:', updateErr);
-    }
-
-    // Insert into report_reviews table
-    try {
-      await adminClient.from('report_reviews').insert({
-        report_id,
-        decision,
-        feedback: feedback?.trim() || '',
-        reviewed_by: callerEmail,
-        reviewed_by_id: callerUid,
-        reviewed_at: nowIso,
+    let normalizedReviewId: string | null = null;
+    if (normalizedReport) {
+      const { data: reviewId, error: reviewError } = await adminClient.rpc("dpl_review_report", {
+        p_report_id: reportId,
+        p_reviewer_id: user.id,
+        p_decision: decision,
+        p_feedback: feedback,
       });
-    } catch (reviewErr) {
-      console.warn('report_reviews insert warning:', reviewErr);
+      if (reviewError) {
+        console.error("Normalized DPL report review failed", reviewError.code);
+        return json({ error: "The report review could not be saved" }, 500, origin);
+      }
+      normalizedReviewId = reviewId ? String(reviewId) : null;
     }
 
-    // Insert into admin_activity_logs
-    try {
-      await adminClient.from('admin_activity_logs').insert({
-        id: `log-${Date.now()}`,
-        actor_email: callerEmail,
-        actor_name: 'Supervisi DPL',
-        action: `DPL_REVIEW_${decision.toUpperCase()}`,
-        target: `Laporan ${report_id}`,
-        details: `Status diubah ke ${mappedStatus}. Catatan: ${feedback || '-'}`.slice(0, 500),
-        timestamp: nowIso,
-      });
-    } catch (logErr) {
-      console.warn('admin_activity_logs insert warning:', logErr);
+    if (workspaceRecord) {
+      const currentPayload = workspaceRecord.payload || {};
+      const now = new Date().toISOString();
+      const uiStatus = decision === "approved"
+        ? "approved_by_dpl"
+        : decision === "rejected" ? "rejected" : "revision_requested";
+      const revisionHistory = Array.isArray(currentPayload.revisionHistory)
+        ? currentPayload.revisionHistory
+        : [];
+      const nextPayload = {
+        ...currentPayload,
+        dplNotes: feedback,
+        status: uiStatus,
+        reviewedBy: supervisor.full_name || user.email,
+        reviewTimestamp: now,
+        revisionHistory: [
+          ...revisionHistory,
+          {
+            version: revisionHistory.length + 1,
+            status: uiStatus,
+            comments: feedback,
+            reviewedBy: supervisor.full_name || user.email,
+            timestamp: now,
+          },
+        ],
+      };
+
+      const { error: workspaceUpdateError } = await adminClient
+        .from("kkn_workspace_records")
+        .update({ payload: nextPayload, updated_by: user.id, updated_at: now })
+        .eq("id", workspaceRecord.id);
+
+      if (workspaceUpdateError) {
+        console.error("Workspace report review failed", workspaceUpdateError.code);
+        return json({ error: "The workspace report review could not be saved" }, 500, origin);
+      }
     }
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        report_id,
-        status: mappedStatus,
-        decision,
-        feedback: feedback?.trim() || '',
-        reviewed_at: nowIso,
-        message: 'Keputusan evaluasi DPL berhasil disimpan.',
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err instanceof Error ? err.message : 'Internal Edge Function error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return json({
+      success: true,
+      review_id: normalizedReviewId,
+      status: decision,
+      workspace_record_updated: Boolean(workspaceRecord),
+    }, 200, origin);
+  } catch (error) {
+    console.error("Unexpected DPL review error", error instanceof Error ? error.message : "unknown");
+    return json({ error: "Unexpected server error while reviewing the report" }, 500, origin);
   }
 });

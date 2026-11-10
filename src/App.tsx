@@ -1,29 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { WorkspaceModuleId, ViewMode, UnitConfig } from './types';
-import {
-  INITIAL_UNIT_CONFIG,
-  INITIAL_MEMBERS,
-  INITIAL_PROGRAMS,
-  INITIAL_TASKS,
-  INITIAL_MEETINGS,
-  INITIAL_TRANSACTIONS,
-  INITIAL_VILLAGE_RESEARCH,
-  INITIAL_SURVEYS,
-  INITIAL_INVENTORY,
-  INITIAL_DOCUMENTATION,
-  INITIAL_REPORTS,
-  INITIAL_DECISION_LOG,
-  INITIAL_ARCHIVE,
-  INITIAL_STAKEHOLDERS,
-  INITIAL_ANNOUNCEMENTS,
-  INITIAL_DOCUMENTATION_ALBUMS,
-} from './data/mockData';
+import { INITIAL_MEMBERS, OFFICIAL_PROJECT_ID } from './data/mockData';
 
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ConfirmProvider, useConfirm } from './context/ConfirmContext';
 import { AuthModal } from './components/auth/AuthModal';
 import { ResetPasswordView } from './components/auth/ResetPasswordView';
-import { InvitationManagerModal } from './components/admin/InvitationManagerModal';
 
 import { Sidebar } from './components/layout/Sidebar';
 import { Topbar } from './components/layout/Topbar';
@@ -48,6 +30,13 @@ import { DplWorkspaceView } from './components/dpl/DplWorkspaceView';
 import { AdminConsoleView } from './components/admin/AdminConsoleView';
 import { supabase, isSupabaseConfigured, isFabricatedLegacyRecord } from './lib/supabase';
 import {
+  listWorkspaceRecords,
+  upsertWorkspaceRecord,
+  deleteWorkspaceRecord,
+  migrateLegacyLocalStorageToSupabase,
+  WorkspaceModuleKey,
+} from './lib/workspaceRepository';
+import {
   Member,
   ReportRecord,
   WorkProgram,
@@ -67,43 +56,11 @@ import {
   AnnouncementRecord,
 } from './types';
 
-const INITIAL_PUBLIC_ARTICLES: PublicArticleRecord[] = [
-  {
-    id: 'art-1',
-    title: 'Transformasi Katalog Digital Tenun Gedogan Sasak di Dusun Gubuk Lauk',
-    category: 'Berita Kegiatan',
-    summary:
-      'Tim KKN 104 mendampingi 45 penenun tradisional Pringgasela Selatan mendokumentasikan motif tenun ikat pewarna alami ke dalam katalog digital dwibahasa.',
-    content:
-      'Melalui program kerja unggulan KKN-PDD-01, mahasiswa KKN bersama kelompok penenun Dusun Gubuk Lauk melakukan pemotretan studio mini untuk 25 motif kain tenun gedogan asli Pringgasela Selatan.',
-    author: 'Divisi PDD & Acara',
-    date: '2026-07-24',
-    dusun: 'Dusun Gubuk Lauk',
-    coverImageUrl:
-      'https://images.unsplash.com/photo-1606760227091-3dd870d97f1d?auto=format&fit=crop&w=900&q=80',
-    isPublished: true,
-  },
-  {
-    id: 'art-2',
-    title: 'Inovasi MP-ASI Puding Daun Kelor untuk Pencegahan Stunting di Posyandu Dusun',
-    category: 'Edukasi Warga',
-    summary:
-      'Optimalisasi tanaman kelor pekarangan warga menjadi kudapan sehat kaya zat besi dan protein bagi balita di 7 dusun Desa Pringgasela Selatan.',
-    content:
-      'Bekerja sama dengan Bidan Desa dan Kader Posyandu Melati, mahasiswa KKN menggelar demonstrasi pengolahan daun kelor segar menjadi puding bergizi.',
-    author: 'Putu Sri Astiningsih (Divisi Konsumsi)',
-    date: '2026-07-25',
-    dusun: 'Dusun Sinar Sari',
-    coverImageUrl:
-      'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=900&q=80',
-    isPublished: true,
-  },
-];
-
 function AppContent() {
   const {
     user,
     profile,
+    registeredEmails,
     isAdmin,
     isSuperAdmin,
     loading,
@@ -129,40 +86,37 @@ function AppContent() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
 
-  // Core Data States
-  const [unitConfig, setUnitConfig] = useState<UnitConfig>(INITIAL_UNIT_CONFIG);
-  const [members, setMembers] = useState(INITIAL_MEMBERS);
+  // Persistent workspace data is loaded from Supabase; mock/local datasets are not used as fallbacks.
+  const [unitConfig, setUnitConfig] = useState<UnitConfig>({
+    unitCode: '', unitName: '', university: '', faculty: '', period: '',
+    villageName: '', district: '', regency: '', startDate: '', endDate: '',
+    dplName: '', dplNip: '', poskoAddress: '',
+  });
+  const [members, setMembers] = useState<Member[]>([]);
   const [sbPublicRoster, setSbPublicRoster] = useState<any[]>([]);
   const [dplSupervisorRecord, setDplSupervisorRecord] = useState<any | null>(null);
-  const [programs, setPrograms] = useState(INITIAL_PROGRAMS);
-  const [tasks, setTasks] = useState(INITIAL_TASKS);
-  const [meetings, setMeetings] = useState(INITIAL_MEETINGS);
-  const [transactions, setTransactions] = useState(INITIAL_TRANSACTIONS);
-  const [villageResearch, setVillageResearch] = useState<VillageResearchData>(
-    INITIAL_VILLAGE_RESEARCH
-  );
-  const [surveys, setSurveys] = useState<SurveyRecord[]>(INITIAL_SURVEYS);
-  const [inventory, setInventory] = useState(INITIAL_INVENTORY);
-  const [documentation, setDocumentation] = useState<DocumentationPhoto[]>(
-    INITIAL_DOCUMENTATION
-  );
-  const [documentationAlbums, setDocumentationAlbums] = useState<DocumentationAlbum[]>(
-    INITIAL_DOCUMENTATION_ALBUMS
-  );
-  const [reports, setReports] = useState(INITIAL_REPORTS);
-  const [decisions, setDecisions] = useState(INITIAL_DECISION_LOG);
-  const [archive, setArchive] = useState(INITIAL_ARCHIVE);
-  const [publicArticles, setPublicArticles] = useState<PublicArticleRecord[]>(
-    INITIAL_PUBLIC_ARTICLES
-  );
-  const [stakeholders, setStakeholders] = useState<StakeholderRecord[]>(
-    INITIAL_STAKEHOLDERS
-  );
-  const [announcements, setAnnouncements] = useState<AnnouncementRecord[]>(
-    INITIAL_ANNOUNCEMENTS
-  );
+  const [programs, setPrograms] = useState<WorkProgram[]>([]);
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [meetings, setMeetings] = useState<MeetingItem[]>([]);
+  const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
+  const [villageResearch, setVillageResearch] = useState<VillageResearchData>({
+    villageName: '', kecamatan: '', kabupaten: '', province: '', geography: '',
+    elevation: '', totalPopulation: null, totalHouseholds: null, totalAreaHectares: null,
+    dusuns: [], potencies: [],
+    swot: { strengths: [], weaknesses: [], opportunities: [], threats: [] },
+    priorityNeeds: [],
+  });
+  const [surveys, setSurveys] = useState<SurveyRecord[]>([]);
+  const [inventory, setInventory] = useState<InventoryRecord[]>([]);
+  const [documentation, setDocumentation] = useState<DocumentationPhoto[]>([]);
+  const [documentationAlbums, setDocumentationAlbums] = useState<DocumentationAlbum[]>([]);
+  const [reports, setReports] = useState<ReportRecord[]>([]);
+  const [decisions, setDecisions] = useState<DecisionLogRecord[]>([]);
+  const [archive, setArchive] = useState<ArchiveRecord[]>([]);
+  const [publicArticles, setPublicArticles] = useState<PublicArticleRecord[]>([]);
+  const [stakeholders, setStakeholders] = useState<StakeholderRecord[]>([]);
+  const [announcements, setAnnouncements] = useState<AnnouncementRecord[]>([]);
 
   // Centralized Page Navigation Helper
   const navigateTo = (nextPath: string) => {
@@ -351,175 +305,85 @@ function AppContent() {
     let sbRegisteredEmails: any[] = [];
 
     const reconcileMembers = () => {
-      const memberMap = new Map<string, Member>();
-      // 1. Base team structure
-      INITIAL_MEMBERS.forEach((m) => memberMap.set(m.id, { ...m }));
-
-      // 2. Local persisted member updates (only merge valid non-fabricated fields onto known members)
-      try {
-        const rawLocal = localStorage.getItem('kkn_space_members_v1');
-        if (rawLocal) {
-          const parsedLocal = JSON.parse(rawLocal) as Member[];
-          if (Array.isArray(parsedLocal)) {
-            parsedLocal.forEach((m) => {
-              if (!m || !m.id || isFabricatedLegacyRecord(m)) return;
-              const existing = memberMap.get(m.id);
-              if (existing) {
-                const validEmail =
-                  m.email && !isFabricatedLegacyRecord({ email: m.email }) ? m.email : existing.email;
-                memberMap.set(m.id, {
-                  ...existing,
-                  name: m.name || existing.name,
-                  role: m.role || existing.role,
-                  division: m.division || existing.division,
-                  nim: m.nim || existing.nim,
-                  major: m.major || existing.major,
-                  faculty: m.faculty || existing.faculty,
-                  phone: m.phone || existing.phone,
-                  bio: m.bio || existing.bio,
-                  email: validEmail,
-                  registeredEmail: validEmail || undefined,
-                  avatar: m.avatar || existing.avatar,
-                  avatarStoragePath: m.avatarStoragePath || existing.avatarStoragePath,
-                  accountStatus: m.accountStatus || existing.accountStatus,
-                  responsibilities: Array.isArray(m.responsibilities)
-                    ? m.responsibilities
-                    : existing.responsibilities,
-                });
-              }
-            });
-          }
-        }
-      } catch {
-        // Ignore storage error
+      if (!sbMembers.length) {
+        setMembers([]);
+        return;
       }
 
-      // 3. Direct Supabase 'members' table records (map snake_case/camelCase onto existing KKN members safely)
+      const legacyIdsByName = new Map(
+        INITIAL_MEMBERS.map((member) => [member.name.trim().toLowerCase(), member.id])
+      );
+      const memberMap = new Map<string, Member>();
+
       sbMembers.forEach((rawM: any) => {
         if (!rawM || typeof rawM !== 'object' || isFabricatedLegacyRecord(rawM)) return;
-        const candidateId = rawM.member_id || rawM.memberId || rawM.id;
-        const candidateName = (rawM.name || rawM.full_name || rawM.display_name || '').trim();
-        const candidateEmail = (rawM.email || '').trim().toLowerCase();
-
-        let targetId: string | undefined =
-          candidateId && memberMap.has(candidateId) ? candidateId : undefined;
-
-        if (!targetId && candidateName) {
-          for (const [id, existing] of memberMap.entries()) {
-            if (existing.name.toLowerCase() === candidateName.toLowerCase()) {
-              targetId = id;
-              break;
-            }
-          }
-        }
-
-        if (!targetId && candidateEmail) {
-          for (const [id, existing] of memberMap.entries()) {
-            if (existing.email && existing.email.toLowerCase() === candidateEmail) {
-              targetId = id;
-              break;
-            }
-          }
-        }
-
-        if (targetId && memberMap.has(targetId)) {
-          const existing = memberMap.get(targetId)!;
-          const cleanEmail =
-            candidateEmail && !isFabricatedLegacyRecord({ email: candidateEmail })
-              ? candidateEmail
-              : existing.email;
-          memberMap.set(targetId, {
-            ...existing,
-            name: candidateName || existing.name,
-            role: rawM.role && rawM.role !== 'member' ? rawM.role : rawM.position || existing.role,
-            position: rawM.position || existing.position,
-            division: rawM.division || existing.division,
-            faculty: rawM.faculty || existing.faculty,
-            major: rawM.major || existing.major,
-            nim: rawM.nim || existing.nim,
-            phone: rawM.phone || existing.phone,
-            bio: rawM.bio || existing.bio,
-            email: cleanEmail,
-            registeredEmail: cleanEmail || undefined,
-            avatar: rawM.avatar || rawM.avatar_url || existing.avatar,
-            avatarStoragePath: rawM.avatar_storage_path || rawM.avatarStoragePath || existing.avatarStoragePath,
-            accountStatus:
-              rawM.account_status || rawM.accountStatus || existing.accountStatus,
-            authUid: rawM.auth_uid || rawM.authUid || rawM.auth_user_id || rawM.user_id || existing.authUid,
-            responsibilities: Array.isArray(rawM.responsibilities)
-              ? rawM.responsibilities
-              : existing.responsibilities,
-          });
-        }
-      });
-
-      // 4. Authoritative Registered Emails overlay from Supabase + local verified registry
-      let localRegs: any[] = [];
-      try {
-        const rawReg = localStorage.getItem('kkn_space_registered_emails_v1');
-        if (rawReg) {
-          const parsedReg = JSON.parse(rawReg);
-          if (Array.isArray(parsedReg)) {
-            localRegs = parsedReg.filter((r) => !isFabricatedLegacyRecord(r));
-          }
-        }
-      } catch {}
-
-      const allVerifiedRegs = [...localRegs, ...sbRegisteredEmails.filter((r) => !isFabricatedLegacyRecord(r))];
-      allVerifiedRegs.forEach((reg) => {
-        if (!reg || typeof reg !== 'object') return;
-        const regEmail = String(reg.email || '').trim().toLowerCase();
-        if (!regEmail) return;
-        const regMemberId = String(reg.member_id || reg.memberId || '').trim();
-        if (!regMemberId || !memberMap.has(regMemberId)) return;
-
-        const isDisabled = reg.status === 'disabled' || reg.is_active === false;
-        const isActivated =
-          !isDisabled &&
-          (reg.status === 'activated' ||
-            reg.status === 'active' ||
-            Boolean(reg.activated_uid || reg.activatedUid || reg.auth_user_id));
-
-        const m = memberMap.get(regMemberId)!;
-        memberMap.set(regMemberId, {
-          ...m,
-          email: regEmail,
-          registeredEmail: regEmail,
-          accountStatus: isDisabled
-            ? 'disabled'
-            : isActivated
-            ? 'active'
-            : 'pending',
-          authUid: reg.activated_uid || reg.activatedUid || reg.auth_user_id || m.authUid,
-          acceptedAt: reg.activated_at || reg.activatedAt || m.acceptedAt,
-          disabledAt: reg.disabled_at || reg.disabledAt || m.disabledAt,
+        const databaseId = String(rawM.id || rawM.member_id || rawM.memberId || '').trim();
+        const name = String(rawM.full_name || rawM.name || '').trim();
+        if (!databaseId || !name) return;
+        const id = legacyIdsByName.get(name.toLowerCase()) || databaseId;
+        memberMap.set(id, {
+          id,
+          databaseId,
+          name,
+          role: String(rawM.position_title || 'Anggota KKN'),
+          position: String(rawM.position_title || 'Anggota KKN'),
+          division: String(rawM.division || ''),
+          major: String(rawM.study_program || ''),
+          faculty: String(rawM.faculty || ''),
+          nim: String(rawM.student_number || ''),
+          phone: String(rawM.phone_private || ''),
+          email: '',
+          emergencyContact: '',
+          avatar: '',
+          avatarStoragePath: String(rawM.avatar_path || ''),
+          bio: String(rawM.profile_bio || ''),
+          isLeader: rawM.position_title === 'Ketua',
+          status: rawM.status === 'inactive' ? 'leave' : 'active',
+          systemRole: 'member',
+          accountStatus: 'unregistered',
+          authUid: rawM.auth_user_id ? String(rawM.auth_user_id) : undefined,
         });
       });
 
-      // 5. Active user session overlay (Strictly isolated - never copy to other members)
-      if (user && user.email) {
-        const userEmailLower = user.email.trim().toLowerCase();
-        for (const [id, m] of memberMap.entries()) {
-          const isTargetHabir = userEmailLower === 'abhyy333@gmail.com' && id === 'm-4';
-          const isOwnAuthUid = Boolean(user.uid && m.authUid && m.authUid === user.uid);
-          const isOwnProfileId = Boolean(profile?.memberId && profile.memberId === id && isOwnAuthUid);
+      sbRegisteredEmails.forEach((reg) => {
+        if (!reg || typeof reg !== 'object') return;
+        const regEmail = String(reg.email || '').trim().toLowerCase();
+        const regMemberId = String(reg.member_id || '').trim();
+        if (!regEmail || !regMemberId) return;
+        const target = Array.from(memberMap.entries()).find(
+          ([legacyId, item]) => item.databaseId === regMemberId || legacyId === regMemberId
+        );
+        if (!target) return;
+        const [legacyId, member] = target;
+        const isDisabled = reg.is_enabled === false;
+        const isActivated = !isDisabled && Boolean(reg.activated_at && member.authUid);
+        memberMap.set(legacyId, {
+          ...member,
+          email: isDisabled ? '' : regEmail,
+          registeredEmail: isDisabled ? undefined : regEmail,
+          accountStatus: isDisabled ? 'disabled' : isActivated ? 'active' : 'pending',
+          acceptedAt: reg.activated_at || undefined,
+        });
+      });
 
-          if (isTargetHabir || isOwnAuthUid || isOwnProfileId) {
+      if (user?.email) {
+        const currentEmail = user.email.trim().toLowerCase();
+        for (const [id, member] of memberMap.entries()) {
+          const isOwnUid = Boolean(user.uid && member.authUid && member.authUid === user.uid);
+          if (isOwnUid || (currentEmail === 'abhyy333@gmail.com' && member.databaseId === profile?.memberId)) {
             memberMap.set(id, {
-              ...m,
-              accountStatus: 'active',
+              ...member,
               authUid: user.uid,
               email: user.email,
               registeredEmail: user.email,
-              acceptedAt: profile?.acceptedAt || m.acceptedAt,
+              accountStatus: 'active',
+              acceptedAt: profile?.acceptedAt || member.acceptedAt,
             });
           }
         }
       }
 
-      const merged = Array.from(memberMap.values()).filter(
-        (m) => Boolean(m && m.id && m.name)
-      );
+      const merged = Array.from(memberMap.values());
       merged.sort((a, b) => {
         const numA = parseInt(String(a.id).replace(/\D/g, '') || '0', 10);
         const numB = parseInt(String(b.id).replace(/\D/g, '') || '0', 10);
@@ -548,6 +412,7 @@ function AppContent() {
       supabase
         .from('members')
         .select('*')
+        .eq('project_id', OFFICIAL_PROJECT_ID)
         .then(
           ({ data }) => {
             if (Array.isArray(data) && data.length > 0) {
@@ -562,9 +427,9 @@ function AppContent() {
                 setDplSupervisorRecord(supervisor);
                 setUnitConfig((prev) => ({
                   ...prev,
-                  dplName: supervisor.name || supervisor.full_name || prev.dplName,
-                  dplNip: supervisor.nip || supervisor.employee_id || prev.dplNip,
-                  faculty: supervisor.program_study || supervisor.major || supervisor.faculty || prev.faculty,
+                  dplName: supervisor.full_name || prev.dplName,
+                  dplNip: supervisor.institutional_id || prev.dplNip,
+                  faculty: supervisor.faculty || prev.faculty,
                 }));
               }
 
@@ -578,6 +443,7 @@ function AppContent() {
       supabase
         .from('members')
         .select('*')
+        .eq('project_id', OFFICIAL_PROJECT_ID)
         .eq('member_category', 'supervisor')
         .maybeSingle()
         .then(
@@ -586,9 +452,9 @@ function AppContent() {
               setDplSupervisorRecord(data);
               setUnitConfig((prev) => ({
                 ...prev,
-                dplName: data.name || data.full_name || 'Lalu Muhammad Aby Dujana, M.Si.',
-                dplNip: data.nip || data.employee_id || '198910222024061001',
-                faculty: data.program_study || data.major || data.faculty || 'S1 Ilmu Lingkungan',
+                dplName: data.full_name || prev.dplName,
+                dplNip: data.institutional_id || prev.dplNip,
+                faculty: data.faculty || prev.faculty,
               }));
             }
           },
@@ -598,7 +464,8 @@ function AppContent() {
       // 4. Authoritative verified registered_emails
       supabase
         .from('registered_emails')
-        .select('*')
+        .select('id,project_id,member_id,email,is_enabled,activated_at,created_at')
+        .eq('project_id', OFFICIAL_PROJECT_ID)
         .then(
           ({ data }) => {
             if (Array.isArray(data) && data.length > 0) {
@@ -609,10 +476,12 @@ function AppContent() {
           () => {}
         );
     }
-  }, [user, profile]);
+  }, [user, profile, registeredEmails]);
 
-  // Load workspace module data from localStorage + Supabase when authenticated
+  // Load workspace module data from Supabase. Local storage is reserved for one-time legacy import only.
   useEffect(() => {
+    let cancelled = false;
+
     const normalizeTask = (t: any): TaskItem | null => {
       if (!t || !t.id || !t.title) return null;
       return {
@@ -623,7 +492,7 @@ function AppContent() {
         division: String(t.division || 'Semua Divisi'),
         status: t.status || 'todo',
         priority: t.priority || 'medium',
-        dueDate: String(t.dueDate || t.due_date || new Date().toISOString().slice(0, 10)),
+        dueDate: String(t.dueDate || new Date().toISOString().slice(0, 10)),
         tags: Array.isArray(t.tags) ? t.tags : [],
         attachments: Array.isArray(t.attachments) ? t.attachments : [],
       };
@@ -631,210 +500,188 @@ function AppContent() {
 
     const normalizeMeeting = (m: any): MeetingItem | null => {
       if (!m || !m.id || !m.title) return null;
-      const rawAttendees = m.attendeesList || m.attendees_list;
-      const attendeesList = Array.isArray(rawAttendees)
-        ? rawAttendees
-            .filter((a: any) => a && (a.memberId || a.member_id || a.name))
-            .map((a: any, idx: number) => ({
-              memberId: String(a.memberId || a.member_id || `m-${idx + 1}`),
-              name: String(a.name || a.full_name || 'Anggota KKN'),
-              status: (a.status === 'izin' || a.status === 'alpa' ? a.status : 'hadir') as
-                | 'hadir'
-                | 'izin'
-                | 'alpa',
-              notes: a.notes,
-            }))
-        : undefined;
-
+      const attendeesList = Array.isArray(m.attendeesList) ? m.attendeesList : [];
       return {
         ...m,
         id: String(m.id),
         title: String(m.title),
         date: String(m.date || new Date().toISOString().slice(0, 10)),
-        time: String(m.time || '19:30 - 21:00 WITA'),
-        location: String(m.location || 'Posko KKN Desa Pringgasela Selatan'),
+        time: String(m.time || ''),
+        location: String(m.location || ''),
         type: m.type || 'Internal Posko',
-        attendeesCount:
-          typeof m.attendeesCount === 'number'
-            ? m.attendeesCount
-            : attendeesList
-            ? attendeesList.filter((a) => a.status === 'hadir').length
-            : 10,
+        attendeesCount: typeof m.attendeesCount === 'number'
+          ? m.attendeesCount
+          : attendeesList.filter((a: any) => a?.status === 'hadir').length,
         attendeesList,
         agenda: Array.isArray(m.agenda) ? m.agenda.filter(Boolean).map(String) : [],
-        notesSummary: String(m.notesSummary || m.notes_summary || ''),
-        actionItems: Array.isArray(m.actionItems || m.action_items)
-          ? (m.actionItems || m.action_items).map((ai: any, idx: number) => ({
-              id: String(ai?.id || `ai-${idx}`),
-              text: String(ai?.text || ''),
-              pic: String(ai?.pic || 'Tim KKN'),
-              completed: Boolean(ai?.completed),
-            }))
-          : [],
+        notesSummary: String(m.notesSummary || ''),
+        actionItems: Array.isArray(m.actionItems) ? m.actionItems : [],
         documents: Array.isArray(m.documents) ? m.documents : [],
         status: m.status === 'completed' ? 'completed' : 'upcoming',
       };
     };
 
-    try {
-      const savedTasks = localStorage.getItem('kkn_space_tasks_v1');
-      if (savedTasks) {
-        const parsed = JSON.parse(savedTasks);
-        if (Array.isArray(parsed)) {
-          const valid = parsed.map(normalizeTask).filter(Boolean) as TaskItem[];
-          if (valid.length > 0) setTasks(valid);
+    const safeList = async <T extends { id: string }>(moduleKey: WorkspaceModuleKey): Promise<T[]> => {
+      try {
+        return await listWorkspaceRecords<T>(moduleKey);
+      } catch (error) {
+        console.error(`Failed to load Supabase module ${moduleKey}:`, error);
+        return [];
+      }
+    };
+
+    const loadWorkspace = async () => {
+      try {
+        if (user) {
+          try {
+            const migration = await migrateLegacyLocalStorageToSupabase({
+              allowInitialImport: isSuperAdmin,
+              userId: user.uid,
+            });
+            if (migration.removedKeys > 0) {
+              appNotify({
+                type: 'success',
+                title: migration.migratedRecords > 0
+                  ? 'Data Lokal Diamankan di Supabase'
+                  : 'Cache Lokal Dibersihkan',
+                message: migration.migratedRecords > 0
+                  ? `${migration.migratedRecords} record lama diimpor atau diarsipkan ke Supabase; ${migration.removedKeys} kunci penyimpanan lokal KKN dibersihkan.`
+                  : `${migration.removedKeys} kunci cache KKN lama dibersihkan. Data akun dan otorisasi tetap menggunakan database Supabase.`,
+              });
+            }
+          } catch (migrationError) {
+            console.error('Legacy KKN data migration failed:', migrationError);
+            appNotify({
+              type: 'error',
+              title: 'Migrasi Data Lokal Belum Selesai',
+              message: migrationError instanceof Error
+                ? migrationError.message
+                : 'Data lokal belum dihapus karena pemindahan ke Supabase gagal.',
+            });
+          }
+        }
+
+        const publicRecordsPromise = Promise.all([
+          safeList<PublicArticleRecord>('public_articles'),
+          safeList<AnnouncementRecord>('announcements'),
+        ]);
+        if (!user || !isSupabaseConfigured) {
+          const [articles, news] = await publicRecordsPromise;
+          if (!cancelled) {
+            setPublicArticles(articles);
+            setAnnouncements(news);
+          }
+          return;
+        }
+
+        const [
+          projectResult,
+          programsData, tasksData, meetingsData, decisionsData, villageData,
+          surveysData, documentationData, albumsData, transactionsData,
+          inventoryData, reportsData, archiveData, stakeholdersData, publicData,
+          unitConfigRecords,
+        ] = await Promise.all([
+          supabase.from('kkn_projects')
+            .select('slug,name,village_name,subdistrict,regency,province,academic_year,starts_on,ends_on')
+            .eq('id', OFFICIAL_PROJECT_ID)
+            .maybeSingle(),
+          safeList<WorkProgram>('programs'),
+          safeList<TaskItem>('tasks'),
+          safeList<MeetingItem>('meetings'),
+          safeList<DecisionLogRecord>('decisions'),
+          safeList<VillageResearchData>('village_research'),
+          safeList<SurveyRecord>('surveys'),
+          safeList<DocumentationPhoto>('documentation'),
+          safeList<DocumentationAlbum>('documentation_albums'),
+          safeList<TransactionRecord>('transactions'),
+          safeList<InventoryRecord>('inventory'),
+          safeList<ReportRecord>('reports'),
+          safeList<ArchiveRecord>('archive'),
+          safeList<StakeholderRecord>('stakeholders'),
+          publicRecordsPromise,
+          safeList<UnitConfig & { id: string }>('unit_config'),
+        ]);
+
+        if (projectResult.error) {
+          throw new Error(`Gagal memuat konfigurasi project: ${projectResult.error.message}`);
+        }
+        if (cancelled) return;
+
+        const project = projectResult.data;
+        const projectUnitConfig: UnitConfig = {
+          unitCode: String(project?.slug || ''),
+          unitName: String(project?.name || ''),
+          university: '',
+          faculty: '',
+          period: String(project?.academic_year || ''),
+          villageName: String(project?.village_name || ''),
+          district: String(project?.subdistrict || ''),
+          regency: [project?.regency, project?.province].filter(Boolean).join(', '),
+          startDate: String(project?.starts_on || ''),
+          endDate: String(project?.ends_on || ''),
+          dplName: String(dplSupervisorRecord?.full_name || ''),
+          dplNip: String(dplSupervisorRecord?.institutional_id || ''),
+          poskoAddress: '',
+        };
+        setUnitConfig({ ...projectUnitConfig, ...(unitConfigRecords[0] || {}) });
+
+        const emptyVillageResearch: VillageResearchData = {
+          villageName: String(project?.village_name || ''),
+          kecamatan: String(project?.subdistrict || ''),
+          kabupaten: String(project?.regency || ''),
+          province: String(project?.province || ''),
+          geography: '',
+          elevation: '',
+          totalPopulation: null,
+          totalHouseholds: null,
+          totalAreaHectares: null,
+          dusuns: [],
+          potencies: [],
+          swot: { strengths: [], weaknesses: [], opportunities: [], threats: [] },
+          priorityNeeds: [],
+        };
+
+        setPrograms(programsData);
+        setTasks(tasksData.map(normalizeTask).filter(Boolean) as TaskItem[]);
+        setMeetings(meetingsData.map(normalizeMeeting).filter(Boolean) as MeetingItem[]);
+        setDecisions(decisionsData.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+        setVillageResearch(villageData[0] || emptyVillageResearch);
+        setSurveys(surveysData.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+        setDocumentation(documentationData.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+        setDocumentationAlbums(albumsData);
+        setTransactions(transactionsData);
+        setInventory(inventoryData);
+        setReports(reportsData);
+        setArchive(archiveData);
+        setStakeholders(stakeholdersData);
+        setPublicArticles(publicData[0]);
+        setAnnouncements(publicData[1]);
+      } catch (error) {
+        console.error('Workspace Supabase load failed:', error);
+        if (!cancelled) {
+          appNotify({
+            type: 'error',
+            title: 'Gagal Memuat Data Supabase',
+            message: error instanceof Error ? error.message : 'Periksa koneksi dan izin database.',
+          });
         }
       }
-      const savedMeetings = localStorage.getItem('kkn_space_meetings_v1');
-      if (savedMeetings) {
-        const parsed = JSON.parse(savedMeetings);
-        if (Array.isArray(parsed)) {
-          const valid = parsed.map(normalizeMeeting).filter(Boolean) as MeetingItem[];
-          if (valid.length > 0) setMeetings(valid);
-        }
-      }
-      const savedDecisions = localStorage.getItem('kkn_space_decisions_v1');
-      if (savedDecisions) {
-        const parsed = JSON.parse(savedDecisions);
-        if (Array.isArray(parsed) && parsed.length > 0) setDecisions(parsed);
-      }
-      const savedVillage = localStorage.getItem('kkn_space_village_research_v1');
-      if (savedVillage) {
-        const parsed = JSON.parse(savedVillage);
-        if (parsed && Array.isArray(parsed.dusuns)) setVillageResearch(parsed);
-      }
-      const savedSurveys = localStorage.getItem('kkn_space_surveys_v1');
-      if (savedSurveys) {
-        const parsed = JSON.parse(savedSurveys);
-        if (Array.isArray(parsed) && parsed.length > 0) setSurveys(parsed);
-      }
-      const savedDocs = localStorage.getItem('kkn_space_documentation_v1');
-      if (savedDocs) {
-        const parsed = JSON.parse(savedDocs);
-        if (Array.isArray(parsed) && parsed.length > 0) setDocumentation(parsed);
-      }
-      const savedAlbums = localStorage.getItem('kkn_space_documentation_albums_v1');
-      if (savedAlbums) {
-        const parsed = JSON.parse(savedAlbums);
-        if (Array.isArray(parsed) && parsed.length > 0) setDocumentationAlbums(parsed);
-      }
-    } catch {
-      // Ignore storage error
-    }
+    };
 
-    if (!user || !isSupabaseConfigured) return;
-
-    supabase
-      .from('tasks')
-      .select('*')
-      .then(
-        ({ data }) => {
-          if (Array.isArray(data) && data.length > 0) {
-            const valid = data.map(normalizeTask).filter(Boolean) as TaskItem[];
-            if (valid.length > 0) setTasks(valid);
-          }
-        },
-        () => {}
-      );
-
-    supabase
-      .from('meetings')
-      .select('*')
-      .then(
-        ({ data }) => {
-          if (Array.isArray(data) && data.length > 0) {
-            const valid = data.map(normalizeMeeting).filter(Boolean) as MeetingItem[];
-            if (valid.length > 0) {
-              valid.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-              setMeetings(valid);
-            }
-          }
-        },
-        () => {}
-      );
-
-    supabase
-      .from('decisions')
-      .select('*')
-      .then(
-        ({ data }) => {
-          if (Array.isArray(data) && data.length > 0) {
-            const valid = (data as DecisionLogRecord[]).filter((d) => d && d.id && d.title);
-            if (valid.length > 0) {
-              valid.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-              setDecisions(valid);
-            }
-          }
-        },
-        () => {}
-      );
-
-    supabase
-      .from('surveys')
-      .select('*')
-      .then(
-        ({ data }) => {
-          if (Array.isArray(data) && data.length > 0) {
-            const valid = (data as SurveyRecord[]).filter((s) => s && s.id && s.title);
-            if (valid.length > 0) {
-              valid.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-              setSurveys(valid);
-            }
-          }
-        },
-        () => {}
-      );
-
-    supabase
-      .from('documentation')
-      .select('*')
-      .then(
-        ({ data }) => {
-          if (Array.isArray(data) && data.length > 0) {
-            const valid = (data as DocumentationPhoto[]).filter((d) => d && d.id && d.title);
-            if (valid.length > 0) {
-              valid.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-              setDocumentation(valid);
-            }
-          }
-        },
-        () => {}
-      );
-  }, [user]);
+    void loadWorkspace();
+    return () => { cancelled = true; };
+  }, [user?.uid, isSuperAdmin, dplSupervisorRecord?.id]);
 
   const handleSaveDocumentationAlbums = async (nextAlbums: DocumentationAlbum[]) => {
-    setDocumentationAlbums(nextAlbums);
-    try {
-      localStorage.setItem('kkn_space_documentation_albums_v1', JSON.stringify(nextAlbums));
-    } catch {}
-
-    if (isSupabaseConfigured) {
-      for (const alb of nextAlbums) {
-        try {
-          await supabase.from('documentation_albums').upsert(
-            {
-              id: alb.id,
-              title: alb.title,
-              description: alb.description,
-              category: alb.category,
-              activity_date: alb.date,
-              dusun: alb.dusun,
-              location: alb.location,
-              photographer: alb.photographer,
-              responsible_members: alb.responsibleMembers || [],
-              program_id: alb.programId || null,
-              survey_id: alb.surveyId || null,
-              cover_image_url: alb.coverImageUrl,
-              tags: alb.tags || [],
-              verification_status: alb.verificationStatus,
-              is_published: alb.isPublished,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: 'id' }
-          );
-        } catch {}
-      }
+    const nextIds = new Set(nextAlbums.map((album) => album.id));
+    const removedAlbums = documentationAlbums.filter((album) => !nextIds.has(album.id));
+    for (const album of removedAlbums) {
+      await deleteWorkspaceRecord('documentation_albums', album.id);
     }
+    for (const album of nextAlbums) {
+      await upsertWorkspaceRecord('documentation_albums', album);
+    }
+    setDocumentationAlbums(nextAlbums);
   };
 
   const handleChangeViewMode = (mode: ViewMode) => {
@@ -865,25 +712,23 @@ function AppContent() {
     }
   };
 
-  const syncToSupabase = async (
-    table: string,
-    payload: Record<string, any>
-  ) => {
-    if (!isSupabaseConfigured) return;
-    try {
-      await supabase.from(table).upsert(payload, { onConflict: 'id' });
-    } catch {
-      // Optional table or RLS guard
-    }
+  const handleUpdateUnitConfig = async (updatedConfig: UnitConfig) => {
+    await upsertWorkspaceRecord('unit_config', {
+      id: 'unit-config',
+      ...updatedConfig,
+    });
+    setUnitConfig(updatedConfig);
   };
 
-  const deleteFromSupabase = async (table: string, id: string) => {
-    if (!isSupabaseConfigured) return;
-    try {
-      await supabase.from(table).delete().eq('id', id);
-    } catch {
-      // Optional table or RLS guard
-    }
+  const syncToSupabase = async (
+    moduleKey: WorkspaceModuleKey,
+    payload: Record<string, any>
+  ) => {
+    await upsertWorkspaceRecord(moduleKey, payload as { id: string });
+  };
+
+  const deleteFromSupabase = async (moduleKey: WorkspaceModuleKey, id: string) => {
+    await deleteWorkspaceRecord(moduleKey, id);
   };
 
   const handleDplReportNote = async (
@@ -891,243 +736,132 @@ function AppContent() {
     notes: string,
     status: ReportRecord['status']
   ) => {
-    const nowIso = new Date().toISOString();
-    const reviewerName = unitConfig.dplName || 'Lalu Muhammad Aby Dujana, M.Si.';
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase belum terkonfigurasi. Penilaian laporan tidak dapat disimpan.');
+    }
 
-    // Map status to Edge Function decision: 'approved' | 'revision_requested' | 'rejected'
     const decision: 'approved' | 'revision_requested' | 'rejected' =
       status === 'approved' || status === 'approved_by_dpl'
         ? 'approved'
         : status === 'rejected'
-        ? 'rejected'
-        : 'revision_requested';
+          ? 'rejected'
+          : 'revision_requested';
 
-    // 1. Invoke backend Edge Function dpl-report-review via Supabase Functions API
-    if (isSupabaseConfigured) {
-      try {
-        const { data: edgeRes, error: edgeErr } = await supabase.functions.invoke(
-          'dpl-report-review',
-          {
-            body: {
-              report_id: reportId,
-              decision,
-              feedback: notes,
-            },
-          }
-        );
-        if (edgeErr) {
-          console.warn('Notice from dpl-report-review Edge Function (falling back to direct sync):', edgeErr);
-        } else if (edgeRes) {
-          console.info('dpl-report-review Edge Function response:', edgeRes);
-        }
-      } catch (invokeErr) {
-        console.warn('Network call to dpl-report-review Edge Function notice:', invokeErr);
-      }
-    }
-
-    setReports((prev) =>
-      prev.map((r) => {
-        if (r.id !== reportId) return r;
-        const newHistoryEntry = {
-          version: (r.revisionHistory?.length || 0) + 1,
-          status,
-          comments: notes,
-          reviewedBy: reviewerName,
-          timestamp: nowIso,
-        };
-        return {
-          ...r,
-          dplNotes: notes,
-          status,
-          reviewedBy: reviewerName,
-          reviewTimestamp: nowIso,
-          revisionHistory: [...(r.revisionHistory || []), newHistoryEntry],
-        };
-      })
-    );
-
-    const targetReport = reports.find((r) => r.id === reportId);
-    const updatedHistory = [
-      ...(targetReport?.revisionHistory || []),
-      {
-        version: (targetReport?.revisionHistory?.length || 0) + 1,
-        status,
-        comments: notes,
-        reviewedBy: reviewerName,
-        timestamp: nowIso,
+    const { data, error } = await supabase.functions.invoke('dpl-report-review', {
+      body: {
+        report_id: reportId,
+        decision,
+        feedback: notes,
       },
-    ];
-
-    await syncToSupabase('reports', {
-      id: reportId,
-      dplNotes: notes,
-      status,
-      reviewedBy: reviewerName,
-      reviewTimestamp: nowIso,
-      revisionHistory: updatedHistory,
     });
 
-    // Also persist review entry to report_reviews table if available
-    if (isSupabaseConfigured) {
-      try {
-        await supabase.from('report_reviews').insert({
-          report_id: reportId,
-          decision,
-          feedback: notes,
-          reviewed_by: reviewerName,
-          reviewed_at: nowIso,
-        });
-      } catch {
-        // Table or RLS guard
-      }
+    if (error || !data?.success) {
+      throw new Error(data?.error || error?.message || 'Penilaian DPL gagal disimpan ke Supabase.');
     }
+
+    const updatedReports = await listWorkspaceRecords<ReportRecord>('reports');
+    setReports(updatedReports);
   };
 
   const handleUpdateMember = async (updatedMember: Member) => {
     const existingMember = members.find((m) => m.id === updatedMember.id);
+    if (!existingMember?.databaseId) {
+      throw new Error('ID anggota Supabase tidak ditemukan. Muat ulang daftar anggota.');
+    }
+
     const isOwnRecord = Boolean(
       user &&
-        existingMember &&
-        ((profile?.memberId && profile.memberId === existingMember.id) ||
-          (existingMember.authUid && existingMember.authUid === user.uid) ||
-          (user.email &&
-            existingMember.email &&
-            existingMember.email.toLowerCase() === user.email.toLowerCase()) ||
-          (user.email &&
-            existingMember.registeredEmail &&
-            existingMember.registeredEmail.toLowerCase() ===
-              user.email.toLowerCase()) ||
-          (user.email?.toLowerCase() === 'abhyy333@gmail.com' &&
-            existingMember.id === 'm-4'))
+      (
+        existingMember.databaseId === profile?.memberId ||
+        existingMember.authUid === user.uid ||
+        existingMember.email?.toLowerCase() === user.email?.toLowerCase() ||
+        existingMember.registeredEmail?.toLowerCase() === user.email?.toLowerCase()
+      )
     );
 
-    if (!isSuperAdmin && !isAdmin && !isOwnRecord) {
+    if (!isSuperAdmin && !isOwnRecord) {
       throw new Error(
         'Akses ditolak: Anda hanya diizinkan mengubah profil dan data keanggotaan Anda sendiri.'
       );
     }
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase belum terkonfigurasi. Perubahan profil tidak dapat disimpan.');
+    }
 
-    // Enforce field-level protection: non-super_admin users can NEVER modify protected security fields
-    const sanitizedMember: Member = existingMember
-      ? {
-          ...existingMember,
-          ...updatedMember,
-          name: updatedMember.name?.trim() || existingMember.name,
-          role: updatedMember.role?.trim() || existingMember.role,
-          position:
-            updatedMember.role?.trim() ||
-            updatedMember.position?.trim() ||
-            existingMember.position ||
-            existingMember.role,
-          division: updatedMember.division?.trim() || existingMember.division,
-          nim: updatedMember.nim?.trim() || existingMember.nim,
-          major: updatedMember.major?.trim() || existingMember.major,
-          faculty: updatedMember.faculty?.trim() || existingMember.faculty,
-          phone: updatedMember.phone?.trim() || existingMember.phone,
-          emergencyContact:
-            updatedMember.emergencyContact?.trim() ||
-            existingMember.emergencyContact,
-          bio:
-            updatedMember.bio !== undefined
-              ? updatedMember.bio
-              : existingMember.bio,
-          avatar: updatedMember.avatar || existingMember.avatar,
-          avatarStoragePath:
-            updatedMember.avatarStoragePath ||
-            existingMember.avatarStoragePath,
-          responsibilities: Array.isArray(updatedMember.responsibilities)
-            ? updatedMember.responsibilities
-            : existingMember.responsibilities,
-          // Strictly lock security & authorization fields unless super_admin
-          id: existingMember.id,
-          systemRole: isSuperAdmin
-            ? updatedMember.systemRole ?? existingMember.systemRole
-            : existingMember.systemRole,
-          authUid: isSuperAdmin
-            ? updatedMember.authUid ?? existingMember.authUid
-            : existingMember.authUid,
-          accountStatus: isSuperAdmin
-            ? updatedMember.accountStatus ?? existingMember.accountStatus
-            : existingMember.accountStatus,
-          email: isSuperAdmin
-            ? updatedMember.email ?? existingMember.email
-            : existingMember.email,
-          registeredEmail: isSuperAdmin
-            ? updatedMember.registeredEmail ?? existingMember.registeredEmail
-            : existingMember.registeredEmail,
-          acceptedAt: existingMember.acceptedAt,
-          disabledAt: isSuperAdmin
-            ? updatedMember.disabledAt ?? existingMember.disabledAt
-            : existingMember.disabledAt,
-        }
-      : updatedMember;
+    const sanitizedMember: Member = {
+      ...existingMember,
+      ...updatedMember,
+      id: existingMember.id,
+      databaseId: existingMember.databaseId,
+      name: updatedMember.name?.trim() || existingMember.name,
+      role: isSuperAdmin ? (updatedMember.role?.trim() || existingMember.role) : existingMember.role,
+      position: isSuperAdmin
+        ? (updatedMember.position?.trim() || updatedMember.role?.trim() || existingMember.position)
+        : existingMember.position,
+      division: isSuperAdmin ? (updatedMember.division?.trim() || existingMember.division) : existingMember.division,
+      nim: isSuperAdmin ? (updatedMember.nim?.trim() || existingMember.nim) : existingMember.nim,
+      major: isSuperAdmin ? (updatedMember.major?.trim() || existingMember.major) : existingMember.major,
+      faculty: isSuperAdmin ? (updatedMember.faculty?.trim() || existingMember.faculty) : existingMember.faculty,
+      phone: updatedMember.phone?.trim() ?? existingMember.phone,
+      bio: updatedMember.bio !== undefined ? updatedMember.bio : existingMember.bio,
+      avatar: updatedMember.avatar || existingMember.avatar,
+      avatarStoragePath: updatedMember.avatarStoragePath || existingMember.avatarStoragePath,
+      responsibilities: isSuperAdmin && Array.isArray(updatedMember.responsibilities)
+        ? updatedMember.responsibilities
+        : existingMember.responsibilities,
+      systemRole: existingMember.systemRole,
+      authUid: existingMember.authUid,
+      accountStatus: existingMember.accountStatus,
+      email: existingMember.email,
+      registeredEmail: existingMember.registeredEmail,
+      acceptedAt: existingMember.acceptedAt,
+      disabledAt: existingMember.disabledAt,
+    };
 
-    setMembers((prev) => {
-      const exists = prev.some((m) => m.id === sanitizedMember.id);
-      const next = exists
-        ? prev.map((m) => (m.id === sanitizedMember.id ? sanitizedMember : m))
-        : [...prev, sanitizedMember];
-      try {
-        localStorage.setItem('kkn_space_members_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    if (isSuperAdmin) {
+      const { error } = await supabase
+        .from('members')
+        .update({
+          full_name: sanitizedMember.name,
+          position_title: sanitizedMember.position || sanitizedMember.role,
+          division: sanitizedMember.division,
+          student_number: sanitizedMember.nim || null,
+          study_program: sanitizedMember.major || null,
+          faculty: sanitizedMember.faculty || null,
+          phone_private: sanitizedMember.phone || null,
+          profile_bio: sanitizedMember.bio || null,
+          avatar_path: sanitizedMember.avatarStoragePath || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingMember.databaseId)
+        .eq('project_id', OFFICIAL_PROJECT_ID);
 
-    // If the authenticated user updated their own record, sync display metadata to AuthContext & session cache
+      if (error) {
+        throw new Error(`Gagal memperbarui data anggota di Supabase: ${error.message}`);
+      }
+    } else {
+      const { error } = await supabase.rpc('update_own_member_profile', {
+        p_member_id: existingMember.databaseId,
+        p_name: sanitizedMember.name,
+        p_phone: sanitizedMember.phone || null,
+        p_bio: sanitizedMember.bio || null,
+        p_avatar_path: sanitizedMember.avatarStoragePath || null,
+      });
+      if (error) {
+        throw new Error(`Gagal memperbarui profil pribadi: ${error.message}`);
+      }
+    }
+
+    setMembers((prev) =>
+      prev.map((member) => member.id === sanitizedMember.id ? sanitizedMember : member)
+    );
+
     if (isOwnRecord) {
       syncOwnProfileMetadata({
         displayName: sanitizedMember.name,
-        position: sanitizedMember.role,
+        position: sanitizedMember.position || sanitizedMember.role,
         division: sanitizedMember.division,
       });
-    }
-
-    if (isSupabaseConfigured) {
-      try {
-        // 1. Invoke secure field-specific RPC `update_own_member_profile`
-        await supabase.rpc('update_own_member_profile', {
-          p_member_id: sanitizedMember.id,
-          p_name: sanitizedMember.name,
-          p_role: sanitizedMember.role,
-          p_division: sanitizedMember.division,
-          p_nim: sanitizedMember.nim,
-          p_major: sanitizedMember.major,
-          p_faculty: sanitizedMember.faculty,
-          p_phone: sanitizedMember.phone,
-          p_emergency_contact: sanitizedMember.emergencyContact || '-',
-          p_bio: sanitizedMember.bio || '',
-          p_avatar_url: sanitizedMember.avatar,
-          p_avatar_storage_path: sanitizedMember.avatarStoragePath || null,
-          p_responsibilities: sanitizedMember.responsibilities || [],
-        });
-      } catch {
-        // Fallback to direct table update governed by RLS + trigger
-      }
-
-      try {
-        await supabase
-          .from('members')
-          .update({
-            name: sanitizedMember.name,
-            role: sanitizedMember.role,
-            position: sanitizedMember.role,
-            division: sanitizedMember.division,
-            nim: sanitizedMember.nim,
-            major: sanitizedMember.major,
-            faculty: sanitizedMember.faculty,
-            phone: sanitizedMember.phone,
-            emergency_contact: sanitizedMember.emergencyContact || '-',
-            bio: sanitizedMember.bio || '',
-            avatar: sanitizedMember.avatar,
-            avatar_url: sanitizedMember.avatar,
-            avatar_storage_path: sanitizedMember.avatarStoragePath || null,
-            responsibilities: sanitizedMember.responsibilities || [],
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', sanitizedMember.id);
-      } catch {
-        // Governed by RLS
-      }
     }
   };
 
@@ -1152,9 +886,7 @@ function AppContent() {
   const handleAddMeeting = async (newMeeting: MeetingItem) => {
     setMeetings((prev) => {
       const next = [newMeeting, ...prev];
-      try {
-        localStorage.setItem('kkn_space_meetings_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await syncToSupabase('meetings', newMeeting);
@@ -1165,9 +897,7 @@ function AppContent() {
       const next = prev.map((m) =>
         m.id === updatedMeeting.id ? updatedMeeting : m
       );
-      try {
-        localStorage.setItem('kkn_space_meetings_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await syncToSupabase('meetings', updatedMeeting);
@@ -1187,9 +917,7 @@ function AppContent() {
 
     setMeetings((prev) => {
       const next = prev.filter((m) => m.id !== meetingId);
-      try {
-        localStorage.setItem('kkn_space_meetings_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await deleteFromSupabase('meetings', meetingId);
@@ -1217,9 +945,7 @@ function AppContent() {
   const handleAddTask = async (newTask: TaskItem) => {
     setTasks((prev) => {
       const next = [newTask, ...prev];
-      try {
-        localStorage.setItem('kkn_space_tasks_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await syncToSupabase('tasks', newTask);
@@ -1230,9 +956,7 @@ function AppContent() {
       const next = prev.map((t) =>
         t.id === updatedTask.id ? updatedTask : t
       );
-      try {
-        localStorage.setItem('kkn_space_tasks_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await syncToSupabase('tasks', updatedTask);
@@ -1252,9 +976,7 @@ function AppContent() {
 
     setTasks((prev) => {
       const next = prev.filter((t) => t.id !== taskId);
-      try {
-        localStorage.setItem('kkn_space_tasks_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await deleteFromSupabase('tasks', taskId);
@@ -1286,9 +1008,7 @@ function AppContent() {
   const handleAddDecision = async (newDecision: DecisionLogRecord) => {
     setDecisions((prev) => {
       const next = [newDecision, ...prev];
-      try {
-        localStorage.setItem('kkn_space_decisions_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await syncToSupabase('decisions', newDecision);
@@ -1299,9 +1019,7 @@ function AppContent() {
       const next = prev.map((d) =>
         d.id === updatedDecision.id ? updatedDecision : d
       );
-      try {
-        localStorage.setItem('kkn_space_decisions_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await syncToSupabase('decisions', updatedDecision);
@@ -1321,9 +1039,7 @@ function AppContent() {
 
     setDecisions((prev) => {
       const next = prev.filter((d) => d.id !== decisionId);
-      try {
-        localStorage.setItem('kkn_space_decisions_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await deleteFromSupabase('decisions', decisionId);
@@ -1339,12 +1055,7 @@ function AppContent() {
     updatedData: VillageResearchData
   ) => {
     setVillageResearch(updatedData);
-    try {
-      localStorage.setItem(
-        'kkn_space_village_research_v1',
-        JSON.stringify(updatedData)
-      );
-    } catch {}
+    
     await syncToSupabase('village_research', {
       id: 'pringgasela-selatan',
       ...updatedData,
@@ -1355,9 +1066,7 @@ function AppContent() {
   const handleAddSurvey = async (newSurvey: SurveyRecord) => {
     setSurveys((prev) => {
       const next = [newSurvey, ...prev];
-      try {
-        localStorage.setItem('kkn_space_surveys_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await syncToSupabase('surveys', newSurvey);
@@ -1368,9 +1077,7 @@ function AppContent() {
       const next = prev.map((s) =>
         s.id === updatedSurvey.id ? updatedSurvey : s
       );
-      try {
-        localStorage.setItem('kkn_space_surveys_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await syncToSupabase('surveys', updatedSurvey);
@@ -1390,9 +1097,7 @@ function AppContent() {
 
     setSurveys((prev) => {
       const next = prev.filter((s) => s.id !== surveyId);
-      try {
-        localStorage.setItem('kkn_space_surveys_v1', JSON.stringify(next));
-      } catch {}
+      
       return next;
     });
     await deleteFromSupabase('surveys', surveyId);
@@ -1407,12 +1112,7 @@ function AppContent() {
   const handleAddPhoto = async (newPhoto: DocumentationPhoto) => {
     setDocumentation((prev) => {
       const next = [newPhoto, ...prev];
-      try {
-        localStorage.setItem(
-          'kkn_space_documentation_v1',
-          JSON.stringify(next)
-        );
-      } catch {}
+      
       return next;
     });
     await syncToSupabase('documentation', newPhoto);
@@ -1423,12 +1123,7 @@ function AppContent() {
       const next = prev.map((p) =>
         p.id === updatedPhoto.id ? updatedPhoto : p
       );
-      try {
-        localStorage.setItem(
-          'kkn_space_documentation_v1',
-          JSON.stringify(next)
-        );
-      } catch {}
+      
       return next;
     });
     await syncToSupabase('documentation', updatedPhoto);
@@ -1447,49 +1142,50 @@ function AppContent() {
 
     setDocumentation((prev) => {
       const next = prev.filter((p) => p.id !== photoId);
-      try {
-        localStorage.setItem(
-          'kkn_space_documentation_v1',
-          JSON.stringify(next)
-        );
-      } catch {}
+      
       return next;
     });
     await deleteFromSupabase('documentation', photoId);
   };
 
-  const handleToggleMilestone = (
+  const handleToggleMilestone = async (
     programId: string,
     milestoneIndex: number
   ) => {
-    setPrograms((prev) =>
-      prev.map((p) => {
-        if (p.id !== programId) return p;
-        const newMilestones = p.keyMilestones.map((m, idx) =>
-          idx === milestoneIndex ? { ...m, completed: !m.completed } : m
-        );
-        const completedCount = newMilestones.filter((m) => m.completed).length;
-        const newPercent = Math.round(
-          (completedCount / (newMilestones.length || 1)) * 100
-        );
-        return {
-          ...p,
-          keyMilestones: newMilestones,
-          progressPercent: newPercent,
-          status: newPercent === 100 ? 'completed' : 'in_progress',
-        };
-      })
+    const current = programs.find((program) => program.id === programId);
+    if (!current) return;
+
+    const newMilestones = current.keyMilestones.map((milestone, index) =>
+      index === milestoneIndex
+        ? { ...milestone, completed: !milestone.completed }
+        : milestone
     );
+    const completedCount = newMilestones.filter((milestone) => milestone.completed).length;
+    const newPercent = Math.round((completedCount / (newMilestones.length || 1)) * 100);
+    const updatedProgram: WorkProgram = {
+      ...current,
+      keyMilestones: newMilestones,
+      progressPercent: newPercent,
+      status: newPercent === 100 ? 'completed' : 'in_progress',
+    };
+
+    await syncToSupabase('programs', updatedProgram);
+    setPrograms((prev) => prev.map((program) =>
+      program.id === programId ? updatedProgram : program
+    ));
   };
 
-  const handleTogglePublicVisibility = (programId: string) => {
-    setPrograms((prev) =>
-      prev.map((p) =>
-        p.id === programId
-          ? { ...p, isFeaturedInPublic: !p.isFeaturedInPublic }
-          : p
-      )
-    );
+  const handleTogglePublicVisibility = async (programId: string) => {
+    const current = programs.find((program) => program.id === programId);
+    if (!current) return;
+    const updatedProgram = {
+      ...current,
+      isFeaturedInPublic: !current.isFeaturedInPublic,
+    };
+    await syncToSupabase('programs', updatedProgram);
+    setPrograms((prev) => prev.map((program) =>
+      program.id === programId ? updatedProgram : program
+    ));
   };
 
   const handleAddTransaction = async (tx: TransactionRecord) => {
@@ -1600,41 +1296,72 @@ function AppContent() {
   };
 
   const handleResetData = async () => {
+    if (!isSuperAdmin) {
+      throw new Error('Hanya Super Admin yang dapat menghapus seluruh data workspace.');
+    }
     const ok = await appConfirm({
-      title: 'Kembalikan Seluruh Data ke Kondisi Awal?',
+      title: 'Hapus Seluruh Data Operasional Workspace?',
       description:
-        'Tindakan ini akan mengembalikan seluruh konfigurasi dan modul lokal ke data awal 10 anggota resmi KKN.',
-      targetName: 'Basis Data Lokal KKN SPACE',
+        'Tindakan ini menghapus data program, tugas, rapat, survei, dokumen, transaksi, laporan, dan pengumuman dari Supabase. Profil anggota, akun, histori registrasi, serta log keamanan tidak dihapus.',
+      targetName: 'Data Operasional KKN SPACE di Supabase',
       consequences: [
-        'Perubahan lokal yang belum tersinkronisasi akan diatur ulang ke data standar.',
+        'Seluruh record operasional pada modul workspace akan dihapus permanen.',
+        'Profil anggota dan akun login tetap dipertahankan.',
       ],
       level: 'irreversible',
-      confirmLabel: 'Reset Data Sekarang',
+      confirmLabel: 'Hapus Data Operasional',
       requireTypeConfirmation: 'RESET',
     });
     if (!ok) return;
 
-    setUnitConfig(INITIAL_UNIT_CONFIG);
-    setMembers(INITIAL_MEMBERS);
-    setPrograms(INITIAL_PROGRAMS);
-    setTasks(INITIAL_TASKS);
-    setMeetings(INITIAL_MEETINGS);
-    setTransactions(INITIAL_TRANSACTIONS);
-    setVillageResearch(INITIAL_VILLAGE_RESEARCH);
-    setSurveys(INITIAL_SURVEYS);
-    setInventory(INITIAL_INVENTORY);
-    setDocumentation(INITIAL_DOCUMENTATION);
-    setDocumentationAlbums(INITIAL_DOCUMENTATION_ALBUMS);
-    setReports(INITIAL_REPORTS);
-    setDecisions(INITIAL_DECISION_LOG);
-    setArchive(INITIAL_ARCHIVE);
-    setPublicArticles(INITIAL_PUBLIC_ARTICLES);
-    setStakeholders(INITIAL_STAKEHOLDERS);
-    setAnnouncements(INITIAL_ANNOUNCEMENTS);
+    const modules: WorkspaceModuleKey[] = [
+      'unit_config', 'programs', 'tasks', 'meetings', 'decisions',
+      'village_research', 'surveys', 'documentation', 'documentation_albums',
+      'transactions', 'inventory', 'reports', 'archive', 'stakeholders',
+      'announcements', 'public_articles',
+    ];
+
+    for (const moduleKey of modules) {
+      const records = await listWorkspaceRecords<{ id: string } & Record<string, any>>(moduleKey);
+      for (const record of records) {
+        await deleteWorkspaceRecord(moduleKey, record.id);
+      }
+    }
+
+    setPrograms([]);
+    setTasks([]);
+    setMeetings([]);
+    setTransactions([]);
+    setSurveys([]);
+    setInventory([]);
+    setDocumentation([]);
+    setDocumentationAlbums([]);
+    setReports([]);
+    setDecisions([]);
+    setArchive([]);
+    setStakeholders([]);
+    setPublicArticles([]);
+    setAnnouncements([]);
+    setVillageResearch({
+      villageName: unitConfig.villageName,
+      kecamatan: unitConfig.district,
+      kabupaten: unitConfig.regency.split(',')[0] || '',
+      province: unitConfig.regency.split(',').slice(1).join(',').trim(),
+      geography: '',
+      elevation: '',
+      totalPopulation: null,
+      totalHouseholds: null,
+      totalAreaHectares: null,
+      dusuns: [],
+      potencies: [],
+      swot: { strengths: [], weaknesses: [], opportunities: [], threats: [] },
+      priorityNeeds: [],
+    });
+    setDocumentation([]);
     appNotify({
       type: 'success',
-      title: 'Data Berhasil Direset',
-      message: 'Seluruh modul telah dikembalikan ke kondisi awal.',
+      title: 'Data Operasional Dihapus',
+      message: 'Workspace telah dikosongkan di Supabase. Data anggota dan autentikasi tetap aman.',
     });
   };
 
@@ -1751,12 +1478,6 @@ function AppContent() {
         }}
       />
 
-      {/* Admin Invitation Manager */}
-      <InvitationManagerModal
-        isOpen={isInviteModalOpen}
-        onClose={() => setIsInviteModalOpen(false)}
-      />
-
       {/* 3 DISTINCT ENVIRONMENTS */}
       {viewMode === 'public' ? (
         /* ENVIRONMENT 1: PUBLIC PORTAL (Dedicated pages for /public, /public/team, /public/programs, /public/documentation, etc.) */
@@ -1793,16 +1514,21 @@ function AppContent() {
           documentation={documentation}
           onUpdateReportNote={handleDplReportNote}
           onSwitchToPublic={() => handleChangeViewMode('public')}
-          onRefreshData={() => {
-            if (isSupabaseConfigured) {
-              supabase
-                .from('reports')
-                .select('*')
-                .then(({ data }) => {
-                  if (Array.isArray(data) && data.length > 0) {
-                    setReports(data as ReportRecord[]);
-                  }
-                });
+          onRefreshData={async () => {
+            try {
+              const latestReports = await listWorkspaceRecords<ReportRecord>('reports');
+              setReports(latestReports);
+              appNotify({
+                type: 'success',
+                title: 'Laporan Diperbarui',
+                message: 'Daftar laporan berhasil dimuat ulang dari Supabase.',
+              });
+            } catch (error) {
+              appNotify({
+                type: 'error',
+                title: 'Gagal Memuat Laporan',
+                message: error instanceof Error ? error.message : 'Data laporan tidak dapat dimuat.',
+              });
             }
           }}
         />
@@ -1866,7 +1592,7 @@ function AppContent() {
                 announcements={announcements}
                 publicArticles={publicArticles}
                 unitConfig={unitConfig}
-                onUpdateUnitConfig={setUnitConfig}
+                onUpdateUnitConfig={handleUpdateUnitConfig}
                 onUpdateMember={handleUpdateMember}
                 onAddProgram={handleAddProgram}
                 onUpdateProgram={handleUpdateProgram}
@@ -2117,7 +1843,7 @@ function AppContent() {
               {currentModule === 'settings' && (
                 <SettingsView
                   config={unitConfig}
-                  onUpdateConfig={setUnitConfig}
+                  onUpdateConfig={handleUpdateUnitConfig}
                   onResetData={handleResetData}
                 />
               )}
