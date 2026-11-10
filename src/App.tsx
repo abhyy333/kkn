@@ -532,14 +532,21 @@ function AppContent() {
 
     const loadWorkspace = async () => {
       try {
-        if (user && isSuperAdmin) {
+        if (user) {
           try {
-            const migration = await migrateLegacyLocalStorageToSupabase();
+            const migration = await migrateLegacyLocalStorageToSupabase({
+              allowInitialImport: isSuperAdmin,
+              userId: user.uid,
+            });
             if (migration.removedKeys > 0) {
               appNotify({
                 type: 'success',
-                title: 'Data Lama Dipindahkan',
-                message: `${migration.migratedRecords} record dipindahkan ke Supabase; ${migration.removedKeys} kunci penyimpanan lokal KKN dibersihkan.`,
+                title: migration.migratedRecords > 0
+                  ? 'Data Lokal Diamankan di Supabase'
+                  : 'Cache Lokal Dibersihkan',
+                message: migration.migratedRecords > 0
+                  ? `${migration.migratedRecords} record lama diimpor atau diarsipkan ke Supabase; ${migration.removedKeys} kunci penyimpanan lokal KKN dibersihkan.`
+                  : `${migration.removedKeys} kunci cache KKN lama dibersihkan. Data akun dan otorisasi tetap menggunakan database Supabase.`,
               });
             }
           } catch (migrationError) {
