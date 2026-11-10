@@ -1,497 +1,282 @@
-// @ts-nocheck
-// =============================================================================
-// SUPABASE EDGE FUNCTION: admin-register-member-email (v1.3.0)
-// Project: scslevzuxxkfcuvwbtty
-// Description:
-//   Privileged server-side Edge Function to manage member & DPL login registrations & invitations:
-//   - Action 'register': Validates format & uniqueness, registers in registered_emails (pending_activation),
-//     triggers Supabase Auth inviteUserByEmail, tracks delivery status (including Gmail SMTP 535),
-//     preserves registered_emails row if SMTP fails, and records audit logs.
-//   - Action 'resend_invitation': Retries sending invitation to existing registered email
-//     without creating duplicate rows, updates delivery status, records audit logs.
-// Security:
-//   - Strict CORS origin allowlist (Vercel production, KKN preview URLs, localhost, AI Studio)
-//   - OPTIONS returns HTTP 200 without requiring Bearer token
-//   - POST requires valid session and verified Super Admin role
-// =============================================================================
+import { createClient } from "npm:@supabase/supabase-js@2";
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
-import { handleCorsPreflight, getCorsHeaders, isAllowedOrigin } from '../_shared/cors.ts';
+const PROJECT_ID = "f5dcc382-8cc9-465a-b919-e58d6a688eea";
+const ALLOWED_ORIGINS = new Set([
+  "https://kkn-beta.vercel.app",
+  "https://kkn.vercel.app",
+  "https://kkn-space.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:3000",
+]);
 
-const SUPER_ADMIN_PRIMARY_EMAIL = 'abhyy333@gmail.com';
-const OFFICIAL_DPL_MEMBER_ID = 'c7bf53d4-1c27-424e-992a-7c7c0f98707a';
-
-interface RegisterEmailPayload {
-  project_id?: string;
-  member_id: string;
-  email?: string;
-  confirm_member_name?: string;
-  reason?: string;
-  action?: 'register' | 'resend_invitation';
+function readKey(envName: string, legacyName?: string): string | null {
+  const raw = Deno.env.get(envName);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      const value = parsed?.default ?? Object.values(parsed ?? {})[0];
+      if (typeof value === "string") return value;
+    } catch {
+      // Legacy environment variable fallback.
+    }
+  }
+  return legacyName ? Deno.env.get(legacyName) ?? null : null;
 }
 
-function parseSmtpError(rawMsg: string): { code: string; message: string } {
-  const lower = rawMsg.toLowerCase();
-  if (lower.includes('535') || lower.includes('username and password not accepted') || lower.includes('badcredentials') || lower.includes('authentication failed')) {
-    return {
-      code: 'smtp_rejected',
-      message: 'SMTP Error (535 5.7.8): Username and Password not accepted. Kredensial App Password Gmail pada konfigurasi SMTP Supabase ditolak.',
-    };
-  }
-  if (lower.includes('rate limit') || lower.includes('too many') || lower.includes('over_email_send_rate_limit')) {
-    return {
-      code: 'rate_limit',
-      message: 'Batas frekuensi pengiriman email Supabase tercapai. Silakan coba kirim ulang sesaat lagi.',
-    };
-  }
-  if (lower.includes('already registered') || lower.includes('user already exists')) {
-    return {
-      code: 'already_exists',
-      message: 'Akun Auth untuk email ini sudah terdaftar di Supabase Auth.',
-    };
-  }
-  if (lower.includes('timeout') || lower.includes('connection refused') || lower.includes('network')) {
-    return {
-      code: 'smtp_unavailable',
-      message: 'Server SMTP tidak dapat dijangkau saat ini.',
-    };
-  }
-  return {
-    code: 'general_error',
-    message: rawMsg,
-  };
+function json(body: Record<string, unknown>, status: number, headers: Record<string, string>) {
+  return new Response(JSON.stringify(body), { status, headers });
+}
+
+function normalizeEmail(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const email = value.trim().toLowerCase();
+  return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
 }
 
 Deno.serve(async (req: Request) => {
-  const origin = req.headers.get('Origin') || req.headers.get('origin');
+  const origin = req.headers.get("origin");
+  const allowedOrigin = origin && ALLOWED_ORIGINS.has(origin) ? origin : "https://kkn-beta.vercel.app";
+  const headers = {
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Headers": "authorization, apikey, x-client-info, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+    "Vary": "Origin",
+  };
 
-  // 1. Handle CORS Preflight (OPTIONS)
-  if (req.method === 'OPTIONS') {
-    return handleCorsPreflight(req);
+  if (req.method === "OPTIONS") {
+    if (origin && !ALLOWED_ORIGINS.has(origin)) return json({ error: "Origin not allowed" }, 403, headers);
+    return new Response("ok", { status: 200, headers });
+  }
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
+  if (origin && !ALLOWED_ORIGINS.has(origin)) return json({ error: "Origin not allowed" }, 403, headers);
+
+  const authorization = req.headers.get("authorization");
+  if (!authorization?.startsWith("Bearer ")) {
+    return json({ error: "Sesi Admin diperlukan. Silakan login ulang." }, 401, headers);
   }
 
-  // 2. Validate Origin for POST
-  if (origin && !isAllowedOrigin(origin)) {
-    return new Response(
-      JSON.stringify({ error: `Forbidden: Origin '${origin}' is not allowed by CORS policy.` }),
-      {
-        status: 403,
-        headers: {
-          'Content-Type': 'application/json',
-          'Vary': 'Origin',
-        },
-      }
-    );
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const publishableKey = readKey("SUPABASE_PUBLISHABLE_KEYS", "SUPABASE_ANON_KEY");
+  const secretKey = readKey("SUPABASE_SECRET_KEYS", "SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !publishableKey || !secretKey) {
+    console.error("Member email registration missing server configuration");
+    return json({ error: "Server configuration is incomplete" }, 500, headers);
   }
 
-  const corsHeaders = getCorsHeaders(origin);
+  const callerClient = createClient(supabaseUrl, publishableKey, {
+    global: { headers: { Authorization: authorization } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const admin = createClient(supabaseUrl, secretKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-    const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
-      return new Response(
-        JSON.stringify({ error: 'Server configuration missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    const { data: authData, error: authError } = await callerClient.auth.getUser();
+    const caller = authData?.user;
+    if (authError || !caller?.id || !caller.email || !caller.email_confirmed_at) {
+      return json({ error: "Sesi Admin tidak valid atau email belum diverifikasi." }, 401, headers);
     }
 
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: 'Missing Authorization header. Sesi autentikasi diperlukan.' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // 3. Verify caller session using caller JWT
-    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    const { data: userData, error: userErr } = await userClient.auth.getUser();
-    if (userErr || !userData?.user?.email) {
-      return new Response(
-        JSON.stringify({ error: 'Unauthorized: Sesi tidak valid atau telah kedaluwarsa. Silakan login kembali.' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const callerEmail = userData.user.email.trim().toLowerCase();
-    const callerUid = userData.user.id;
-
-    // 4. Initialize Admin Client with Service Role Key
-    const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-
-    // Verify caller is super_admin
-    let isCallerSuperAdmin = callerEmail === SUPER_ADMIN_PRIMARY_EMAIL;
-    if (!isCallerSuperAdmin) {
-      const { data: adminRow } = await adminClient
-        .from('admin_accounts')
-        .select('role, is_active')
-        .or(`auth_user_id.eq.${callerUid},user_id.eq.${callerUid},email.ilike.${callerEmail}`)
-        .maybeSingle();
-
-      if (adminRow && adminRow.is_active !== false && adminRow.role === 'super_admin') {
-        isCallerSuperAdmin = true;
-      }
-    }
-
-    if (!isCallerSuperAdmin) {
-      const { data: callerReg } = await adminClient
-        .from('registered_emails')
-        .select('system_role, status, is_active')
-        .ilike('email', callerEmail)
-        .maybeSingle();
-
-      if (
-        callerReg &&
-        callerReg.system_role === 'super_admin' &&
-        callerReg.status !== 'disabled' &&
-        callerReg.is_active !== false
-      ) {
-        isCallerSuperAdmin = true;
-      }
-    }
-
-    if (!isCallerSuperAdmin) {
-      return new Response(
-        JSON.stringify({ error: 'Forbidden: Hanya Super Admin yang diizinkan mengelola registrasi atau undangan email.' }),
-        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // 5. Parse request body
-    const body = (await req.json()) as RegisterEmailPayload;
-    const { member_id, email, confirm_member_name, reason, action = 'register' } = body;
-
-    if (!member_id) {
-      return new Response(
-        JSON.stringify({ error: 'Parameter member_id wajib diisi.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const nowIso = new Date().toISOString();
-
-    // -------------------------------------------------------------------------
-    // ACTION: RESEND INVITATION (Retry invitation without duplicate row)
-    // -------------------------------------------------------------------------
-    if (action === 'resend_invitation') {
-      const { data: existingReg } = await adminClient
-        .from('registered_emails')
-        .select('*')
-        .eq('member_id', member_id)
-        .maybeSingle();
-
-      if (!existingReg || !existingReg.email) {
-        return new Response(
-          JSON.stringify({ error: 'Belum ada email yang terdaftar untuk anggota ini. Daftarkan email terlebih dahulu.' }),
-          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      let deliveryStatus = 'sent';
-      let deliveryError = null;
-
-      try {
-        const { error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
-          existingReg.email,
-          {
-            data: {
-              name: existingReg.name || existingReg.member_name,
-              member_id: existingReg.member_id,
-              role: existingReg.role || existingReg.system_role || 'member',
-            },
-          }
-        );
-
-        if (inviteErr) {
-          const parsed = parseSmtpError(inviteErr.message);
-          deliveryStatus = 'failed';
-          deliveryError = parsed.message;
-        }
-      } catch (err: any) {
-        const parsed = parseSmtpError(err?.message || 'SMTP delivery failed');
-        deliveryStatus = 'failed';
-        deliveryError = parsed.message;
-      }
-
-      // Update existing row in registered_emails (NEVER create a new row)
-      await adminClient
-        .from('registered_emails')
-        .update({
-          invitation_delivery_status: deliveryStatus,
-          invitation_delivery_error: deliveryError,
-          invitation_last_sent_at: nowIso,
-          updated_at: nowIso,
-        })
-        .eq('id', existingReg.id);
-
-      // Audit log
-      try {
-        await adminClient.from('admin_activity_logs').insert({
-          id: `log-${Date.now()}`,
-          actor_email: callerEmail,
-          actor_name: 'Super Admin',
-          action: 'RESEND_INVITATION',
-          target: `${existingReg.name} (${existingReg.email})`,
-          details: `Mengirim ulang undangan ke ${existingReg.email}. Hasil pengiriman: ${deliveryStatus === 'sent' ? 'Terkirim' : `Gagal (${deliveryError})`}`,
-          timestamp: nowIso,
-        });
-      } catch {}
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          action: 'resend_invitation',
-          email: existingReg.email,
-          name: existingReg.name,
-          invitation_delivery_status: deliveryStatus,
-          invitation_delivery_error: deliveryError,
-          message: deliveryStatus === 'sent'
-            ? `Undangan aktivasi berhasil dikirim ulang ke ${existingReg.email}.`
-            : `Undangan email belum dapat dikirim via SMTP (${deliveryError}). Email pendaftaran tetap aman tersimpan.`,
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // -------------------------------------------------------------------------
-    // ACTION: REGISTER (First registration or update assignment)
-    // -------------------------------------------------------------------------
-    if (!email) {
-      return new Response(
-        JSON.stringify({ error: 'Parameter email wajib diisi.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
-      return new Response(
-        JSON.stringify({ error: 'Format alamat email tidak valid.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // 6. Enforce email uniqueness across registered_emails
-    const { data: conflictReg } = await adminClient
-      .from('registered_emails')
-      .select('member_id, member_name, email')
-      .ilike('email', cleanEmail)
-      .neq('member_id', member_id)
+    const { data: adminAccount, error: adminAccountError } = await admin
+      .from("admin_accounts")
+      .select("role,is_active")
+      .eq("user_id", caller.id)
       .maybeSingle();
 
-    if (conflictReg) {
-      return new Response(
-        JSON.stringify({
-          error: `Alamat email "${cleanEmail}" sudah terdaftar untuk anggota ${conflictReg.member_name || conflictReg.member_id}. Gunakan alamat email unik.`,
-        }),
-        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    if (adminAccountError || !adminAccount?.is_active || adminAccount.role !== "super_admin") {
+      return json({ error: "Hanya Super Admin aktif yang boleh mendaftarkan email anggota/DPL." }, 403, headers);
     }
 
-    // 7. Fetch current member details from members table
-    let memberRow = null;
-    const { data: byId } = await adminClient
-      .from('members')
-      .select('*')
-      .eq('id', member_id)
+    const { data: callerRegistration, error: callerRegistrationError } = await admin
+      .from("registered_emails")
+      .select("id")
+      .eq("project_id", PROJECT_ID)
+      .eq("email", caller.email.trim().toLowerCase())
+      .eq("system_role", "super_admin")
+      .eq("is_enabled", true)
       .maybeSingle();
 
-    if (byId) {
-      memberRow = byId;
-    } else if (confirm_member_name) {
-      const { data: byName } = await adminClient
-        .from('members')
-        .select('*')
-        .ilike('name', confirm_member_name.trim())
-        .maybeSingle();
-      if (byName) memberRow = byName;
+    if (callerRegistrationError || !callerRegistration) {
+      return json({ error: "Email Super Admin belum terdaftar aktif pada registry KKN SPACE." }, 403, headers);
     }
 
-    const isSupervisor =
-      member_id === OFFICIAL_DPL_MEMBER_ID ||
-      memberRow?.member_category === 'supervisor' ||
-      memberRow?.is_supervisor === true ||
-      memberRow?.role?.toLowerCase().includes('dpl');
-
-    const memberName =
-      memberRow?.name ||
-      confirm_member_name ||
-      (isSupervisor ? 'Lalu Muhammad Aby Dujana, M.Si.' : 'Anggota KKN');
-
-    const memberPosition =
-      memberRow?.position ||
-      memberRow?.role ||
-      (isSupervisor ? 'Dosen Pembimbing Lapangan' : 'Anggota');
-
-    const memberDivision =
-      memberRow?.division ||
-      (isSupervisor ? 'Supervisi' : 'Divisi Acara');
-
-    const systemRole = isSupervisor ? 'dpl' : 'member';
-
-    // Check existing registration row for this member
-    const { data: existingReg } = await adminClient
-      .from('registered_emails')
-      .select('*')
-      .eq('member_id', member_id)
-      .maybeSingle();
-
-    const previousEmail = existingReg?.email || memberRow?.email || null;
-
-    // 8. Attempt sending Supabase Auth invitation
-    let invitationStatus = 'sent';
-    let invitationError = null;
-
+    let payload: { project_id?: string; member_id?: string; email?: string; confirm_member_name?: string; reason?: string };
     try {
-      const { error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
-        cleanEmail,
-        {
-          data: {
-            name: memberName,
-            member_id,
-            role: isSupervisor ? 'dpl' : 'member',
-          },
-        }
-      );
-
-      if (inviteErr) {
-        const parsed = parseSmtpError(inviteErr.message);
-        invitationStatus = 'failed';
-        invitationError = parsed.message;
-      }
-    } catch (inviteEx: any) {
-      const parsed = parseSmtpError(inviteEx?.message || 'SMTP delivery failed');
-      invitationStatus = 'failed';
-      invitationError = parsed.message;
+      payload = await req.json();
+    } catch {
+      return json({ error: "Format request tidak valid." }, 400, headers);
     }
 
-    // 9. Store in registered_emails (CRITICAL: KEEP registration even if SMTP delivery failed)
-    const regPayload = {
-      email: cleanEmail,
-      member_id,
-      member_name: memberName,
-      name: memberName,
-      position: memberPosition,
-      division: memberDivision,
-      system_role: systemRole,
-      role: isSupervisor ? 'dpl' : 'member',
-      status: 'pending_activation',
-      is_active: true,
-      auth_user_id: null,
-      invitation_delivery_status: invitationStatus,
-      invitation_delivery_error: invitationError,
-      invitation_last_sent_at: nowIso,
-      registered_by: callerEmail,
-      registered_at: nowIso,
+    if (payload.project_id && payload.project_id !== PROJECT_ID) {
+      return json({ error: "Project KKN tidak dikenali." }, 404, headers);
+    }
+    const memberId = typeof payload.member_id === "string" ? payload.member_id.trim() : "";
+    const email = normalizeEmail(payload.email);
+    const confirmedName = typeof payload.confirm_member_name === "string" ? payload.confirm_member_name.trim() : "";
+    const reason = typeof payload.reason === "string" ? payload.reason.trim().slice(0, 500) : "Pendaftaran email oleh Super Admin";
+
+    if (!memberId || !email || !confirmedName) {
+      return json({ error: "ID anggota, email, dan konfirmasi nama wajib diisi." }, 400, headers);
+    }
+
+    const { data: member, error: memberError } = await admin
+      .from("members")
+      .select("id,project_id,full_name,position_title,division,member_category,status,auth_user_id")
+      .eq("id", memberId)
+      .eq("project_id", PROJECT_ID)
+      .maybeSingle();
+
+    if (memberError || !member) {
+      return json({ error: "Profil anggota tidak ditemukan. Muat ulang daftar anggota Admin Console." }, 404, headers);
+    }
+    if (confirmedName.toLowerCase() !== member.full_name.trim().toLowerCase()) {
+      return json({ error: `Konfirmasi nama tidak cocok. Masukkan "${member.full_name}" persis.` }, 409, headers);
+    }
+    if (member.auth_user_id) {
+      return json({
+        error: "Anggota ini sudah terhubung ke akun Auth. Gunakan tindakan Ganti Email untuk mengganti kredensial login.",
+        code: "ACCOUNT_ALREADY_LINKED",
+      }, 409, headers);
+    }
+    if (member.status === "inactive") {
+      return json({ error: "Anggota tidak aktif dan tidak dapat didaftarkan untuk login." }, 409, headers);
+    }
+
+    const { data: currentRows, error: currentError } = await admin
+      .from("registered_emails")
+      .select("id,email,is_enabled")
+      .eq("project_id", PROJECT_ID)
+      .eq("member_id", memberId);
+
+    if (currentError) {
+      console.error("Existing member registration lookup failed", currentError.code);
+      return json({ error: "Tidak dapat memeriksa email anggota saat ini." }, 500, headers);
+    }
+    if ((currentRows?.length ?? 0) > 1) {
+      return json({ error: "Anggota ini memiliki lebih dari satu email login. Selesaikan data ganda terlebih dahulu." }, 409, headers);
+    }
+
+    const current = currentRows?.[0] ?? null;
+    if (current && current.email.toLowerCase() !== email) {
+      return json({
+        error: "Anggota sudah memiliki email login berbeda. Gunakan tindakan Ganti Email agar akun lama dicabut dengan aman.",
+        code: "EMAIL_ALREADY_ASSIGNED",
+      }, 409, headers);
+    }
+
+    const { data: conflict, error: conflictError } = await admin
+      .from("registered_emails")
+      .select("member_id")
+      .eq("project_id", PROJECT_ID)
+      .eq("email", email)
+      .maybeSingle();
+
+    if (conflictError) {
+      console.error("Email uniqueness lookup failed", conflictError.code);
+      return json({ error: "Tidak dapat memeriksa keunikan email saat ini." }, 500, headers);
+    }
+    if (conflict && conflict.member_id !== memberId) {
+      return json({ error: "Email sudah digunakan oleh anggota lain." }, 409, headers);
+    }
+
+    const { data: authUsers, error: authUsersError } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    if (authUsersError) {
+      console.error("Auth user uniqueness lookup failed", authUsersError.message);
+      return json({ error: "Tidak dapat memeriksa akun Auth. Coba lagi." }, 503, headers);
+    }
+    const orphanAuth = authUsers.users.find((item) => (item.email || "").trim().toLowerCase() === email);
+    if (orphanAuth) {
+      return json({
+        error: "Email sudah memiliki akun Auth yang belum tertaut ke anggota. Jangan buat akun duplikat; selesaikan rekonsiliasi akun terlebih dahulu.",
+        code: "AUTH_ACCOUNT_EXISTS",
+      }, 409, headers);
+    }
+
+    const record = {
+      project_id: PROJECT_ID,
+      member_id: memberId,
+      email,
+      system_role: null,
+      is_enabled: true,
+      registered_by: caller.id,
+      activated_at: null,
     };
 
-    if (existingReg?.id) {
-      await adminClient
-        .from('registered_emails')
-        .update(regPayload)
-        .eq('id', existingReg.id);
-    } else {
-      const { error: insertErr } = await adminClient
-        .from('registered_emails')
-        .insert({
-          id: `reg-${member_id}`,
-          ...regPayload,
-        });
-
-      if (insertErr) {
-        // Fallback upsert by email
-        await adminClient
-          .from('registered_emails')
-          .upsert(regPayload, { onConflict: 'email' });
+    let saved;
+    if (current?.id) {
+      const { data, error } = await admin
+        .from("registered_emails")
+        .update(record)
+        .eq("id", current.id)
+        .select("id,email,member_id,project_id,is_enabled,created_at")
+        .single();
+      if (error) {
+        console.error("Registration update failed", error.code);
+        return json({ error: "Gagal menyimpan pendaftaran email ke database." }, 500, headers);
       }
-    }
-
-    // 10. Update members table (preserve all identity, academic, and role fields)
-    if (memberRow?.id) {
-      await adminClient
-        .from('members')
-        .update({
-          email: cleanEmail,
-          account_status: 'pending',
-          status: 'Offline',
-          updated_at: nowIso,
-        })
-        .eq('id', memberRow.id);
+      saved = data;
     } else {
-      await adminClient
-        .from('members')
-        .update({
-          email: cleanEmail,
-          account_status: 'pending',
-          status: 'Offline',
-          updated_at: nowIso,
-        })
-        .eq('id', member_id);
+      const { data, error } = await admin
+        .from("registered_emails")
+        .insert(record)
+        .select("id,email,member_id,project_id,is_enabled,created_at")
+        .single();
+      if (error) {
+        console.error("Registration insert failed", error.code);
+        return json({ error: error.code === "23505" ? "Email sudah digunakan oleh anggota lain." : "Gagal menyimpan pendaftaran email ke database." }, error.code === "23505" ? 409 : 500, headers);
+      }
+      saved = data;
     }
 
-    // 11. Record in member_email_history
-    try {
-      await adminClient.from('member_email_history').insert({
-        member_id,
-        member_name: memberName,
-        previous_email: previousEmail,
-        replacement_email: cleanEmail,
-        action: previousEmail ? 'REPLACE' : 'REGISTER',
-        performed_by: callerEmail,
-        reason: reason || (isSupervisor ? 'Registrasi email DPL oleh Super Admin' : 'Pendaftaran email anggota oleh Super Admin'),
-        created_at: nowIso,
-      });
-    } catch (histErr) {
-      console.warn('member_email_history insert notice:', histErr);
+    const { error: historyError } = await admin.from("member_email_history").insert({
+      project_id: PROJECT_ID,
+      member_id: memberId,
+      previous_email: current?.email ?? null,
+      new_email: email,
+      action: "registered",
+      changed_by: caller.id,
+      changed_by_name_snapshot: caller.email,
+      reason,
+    });
+    if (historyError) {
+      console.error("Email registry saved but history insert failed", historyError.code);
     }
 
-    // 12. Record in admin_activity_logs
-    try {
-      await adminClient.from('admin_activity_logs').insert({
-        id: `log-${Date.now()}`,
-        actor_email: callerEmail,
-        actor_name: 'Super Admin',
-        action: isSupervisor ? 'REGISTER_DPL_EMAIL' : 'REGISTER_MEMBER_EMAIL',
-        target: `${memberName} (${cleanEmail})`,
-        details: `Registrasi email login: ${cleanEmail}. Pengiriman undangan: ${invitationStatus === 'sent' ? 'Berhasil' : `Terkendala (${invitationError})`}`,
-        timestamp: nowIso,
-      });
-    } catch (logErr) {
-      console.warn('admin_activity_logs insert notice:', logErr);
-    }
+    const { error: activityError } = await admin.from("activity_logs").insert({
+      project_id: PROJECT_ID,
+      actor_id: caller.id,
+      action: "member_email_registered",
+      entity_type: "member",
+      entity_id: memberId,
+      summary: `Email login ${email} didaftarkan untuk ${member.full_name}. Anggota dapat membuat password sendiri melalui halaman aktivasi.`,
+      actor_name_snapshot: caller.email,
+      actor_email_snapshot: caller.email,
+    });
+    if (activityError) console.error("Registration activity log failed", activityError.code);
 
-    const message = invitationStatus === 'sent'
-      ? (isSupervisor
-          ? `Email DPL (${cleanEmail}) berhasil didaftarkan dan undangan email berhasil dikirim.`
-          : `Email anggota (${cleanEmail}) berhasil didaftarkan dan undangan email berhasil dikirim.`)
-      : (isSupervisor
-          ? `Email DPL (${cleanEmail}) berhasil didaftarkan. Pengiriman undangan otomatis terkendala konfigurasi SMTP (${invitationError}). Email pendaftaran tetap disimpan dan dapat dikirim ulang oleh Admin.`
-          : `Email anggota (${cleanEmail}) berhasil didaftarkan. Pengiriman undangan otomatis terkendala konfigurasi SMTP (${invitationError}). Email pendaftaran tetap disimpan dan dapat dikirim ulang oleh Admin.`);
+    const role = member.member_category === "supervisor"
+      ? "dpl"
+      : member.position_title === "Ketua" ? "ketua" : "member";
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        member_id,
-        email: cleanEmail,
-        name: memberName,
-        status: 'pending_activation',
-        invitation_delivery_status: invitationStatus,
-        invitation_delivery_error: invitationError,
-        message,
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err instanceof Error ? err.message : 'Internal Edge Function error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return json({
+      success: true,
+      registration_id: saved.id,
+      email,
+      member_id: memberId,
+      name: member.full_name,
+      position: member.position_title,
+      division: member.division,
+      role,
+      status: "pending_activation",
+      registered_at: saved.created_at,
+      invitation_delivery_status: "not_required",
+      message: `Email ${email} berhasil disimpan pada registry resmi KKN SPACE. Anggota dapat mengaktifkan akun dengan password sendiri.`,
+    }, 200, headers);
+  } catch (error) {
+    console.error("Unexpected registration error", error instanceof Error ? error.message : "unknown");
+    return json({ error: "Terjadi kesalahan saat menyimpan registrasi email." }, 500, headers);
   }
 });
