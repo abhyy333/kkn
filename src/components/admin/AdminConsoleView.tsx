@@ -379,11 +379,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
   const [replaceReason, setReplaceReason] = useState('');
   const [isSubmittingReplace, setIsSubmittingReplace] = useState(false);
 
-  // Email Direct Registration Modal State: "Daftarkan Email"
-  const [registerEmailTarget, setRegisterEmailTarget] = useState<Member | null>(null);
-  const [registerTargetEmailVal, setRegisterTargetEmailVal] = useState('');
-  const [isSubmittingRegisterTarget, setIsSubmittingRegisterTarget] = useState(false);
-
   // Dedicated Read-Only Member Email History Panel State
   const [emailHistoryTarget, setEmailHistoryTarget] = useState<Member | null>(null);
   const [memberEmailHistoryList, setMemberEmailHistoryList] = useState<any[]>([]);
@@ -391,13 +386,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
 
   // Member Account History Modal (Legacy Logs Viewer)
   const [historyMember, setHistoryMember] = useState<Member | null>(null);
-
-  // Edit Registered Email Modal State
-  const [editingRegRecord, setEditingRegRecord] = useState<RegisteredEmailRecord | null>(null);
-  const [editRegEmailVal, setEditRegEmailVal] = useState('');
-  const [editRegNameVal, setEditRegNameVal] = useState('');
-  const [editRegPosVal, setEditRegPosVal] = useState('');
-  const [editRegDivVal, setEditRegDivVal] = useState('');
 
   // Generic CRUD Editor Modal State
   const [isCrudModalOpen, setIsCrudModalOpen] = useState(false);
@@ -448,53 +436,34 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
   const enrichedMembers = useMemo(() => {
     return members.map((m) => {
       // 1. Strict match on memberId ONLY (Never match by name or fallback email)
+      const databaseMemberId = String(m.databaseId || m.id).trim();
       const matchedReg = registeredEmails.find(
-        (r) => String(r.memberId || (r as any).member_id || '').trim() === String(m.id).trim()
+        (r) => String(r.memberId || '').trim() === databaseMemberId
       );
 
-      // 2. Email resolution: ONLY m-4 defaults to abhyy333@gmail.com. All others strictly come from matchedReg
-      let confirmedEmail = '';
-      if (m.id === 'm-4') {
-        confirmedEmail = 'abhyy333@gmail.com';
-      } else if (matchedReg?.email) {
-        confirmedEmail = matchedReg.email.trim();
-      }
-
-      // 3. Status resolution
+      // Email and activation state are resolved only from the database registry.
+      const confirmedEmail = matchedReg?.status === 'disabled' ? '' : (matchedReg?.email || '').trim();
       let resolvedStatus: 'unregistered' | 'pending' | 'active' | 'disabled' = 'unregistered';
-      if (m.id === 'm-4' || confirmedEmail.toLowerCase() === 'abhyy333@gmail.com') {
-        resolvedStatus = 'active';
-      } else if (matchedReg?.status === 'disabled' || m.accountStatus === 'disabled') {
+      if (matchedReg?.status === 'disabled') {
         resolvedStatus = 'disabled';
-      } else if (
-        matchedReg?.status === 'activated' ||
-        (confirmedEmail && (m.accountStatus === 'active' || m.authUid))
-      ) {
+      } else if (matchedReg?.status === 'activated') {
         resolvedStatus = 'active';
-      } else if (confirmedEmail) {
+      } else if (matchedReg?.email) {
         resolvedStatus = 'pending';
-      } else {
-        resolvedStatus = 'unregistered';
       }
 
-      // 4. Admin privilege resolution using exact members.auth_user_id matching admin_accounts.user_id
-      // ONLY Abdul Habir Al Majdi (m-4 / abhyy333@gmail.com) displays super_admin badge
-      // Asma Nadiya (m-5) must NOT receive an admin badge!
+      // System privileges come from admin_accounts, never from an email address or roster label.
       let resolvedSystemRole: 'super_admin' | 'admin' | 'member' = 'member';
-      if (m.id === 'm-4' || confirmedEmail.toLowerCase() === 'abhyy333@gmail.com') {
-        resolvedSystemRole = 'super_admin';
-      } else {
-        const authUid = m.authUid || (m as any).auth_user_id;
-        if (authUid && adminAccounts.length > 0) {
-          const adminAcct = adminAccounts.find(
-            (a) =>
-              (a.user_id === authUid || a.auth_user_id === authUid) &&
-              a.is_active !== false &&
-              (a.role === 'super_admin' || a.role === 'admin')
-          );
-          if (adminAcct) {
-            resolvedSystemRole = adminAcct.role === 'admin' ? 'admin' : 'super_admin';
-          }
+      const authUid = m.authUid || (m as any).auth_user_id;
+      if (authUid && adminAccounts.length > 0) {
+        const adminAcct = adminAccounts.find(
+          (a) =>
+            a.user_id === authUid &&
+            a.is_active === true &&
+            (a.role === 'super_admin' || a.role === 'admin')
+        );
+        if (adminAcct) {
+          resolvedSystemRole = adminAcct.role === 'admin' ? 'admin' : 'super_admin';
         }
       }
 
@@ -513,7 +482,7 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
   const isProtectedSuperAdmin = (m: Member & { regRecord?: RegisteredEmailRecord }) => {
     const emailLower = (m.email || '').trim().toLowerCase();
     const currentEmailLower = (user?.email || 'abhyy333@gmail.com').trim().toLowerCase();
-    if (m.id === 'm-4' || emailLower === 'abhyy333@gmail.com') return true;
+    if (m.systemRole === 'super_admin' || emailLower === 'abhyy333@gmail.com') return true;
     if (emailLower && emailLower === currentEmailLower) return true;
     if (m.systemRole === 'super_admin') {
       const activeAdmins = enrichedMembers.filter(
@@ -573,8 +542,8 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
           const { data, error } = await supabase.functions.invoke('admin-reset-member-email', {
             headers: token ? { Authorization: `Bearer ${token}` } : undefined,
             body: {
-              project_id: 'scslevzuxxkfcuvwbtty',
-              member_id: removeEmailTarget.id,
+              project_id: 'f5dcc382-8cc9-465a-b919-e58d6a688eea',
+              member_id: removeEmailTarget.databaseId || removeEmailTarget.id,
               action: 'remove',
               confirm_member_name: removeConfirmName.trim(),
               reason: removeReason.trim() || undefined,
@@ -597,8 +566,11 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
         }
       }
 
-      // Local server API fallback if Edge Function wasn't invoked
-      if (!edgeSuccess && !isSupabaseConfigured) {
+      // No in-memory API fallback: production Vercel reads the authoritative Supabase registry.
+      if (!isSupabaseConfigured) {
+        edgeErrorMsg = 'Supabase belum terkonfigurasi.';
+      }
+      if (!edgeSuccess && false) {
         try {
           const res = await fetch('/api/admin/reset-member-email', {
             method: 'POST',
@@ -689,7 +661,7 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
     const duplicate = registeredEmails.find(
       (r) =>
         r.email.trim().toLowerCase() === cleanNewEmail &&
-        String(r.memberId || (r as any).member_id) !== String(replaceEmailTarget.id)
+        String(r.memberId || '') !== String(replaceEmailTarget.databaseId || replaceEmailTarget.id)
     );
     if (duplicate) {
       pushToast(
@@ -719,8 +691,8 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
           const { data, error } = await supabase.functions.invoke('admin-reset-member-email', {
             headers: token ? { Authorization: `Bearer ${token}` } : undefined,
             body: {
-              project_id: 'scslevzuxxkfcuvwbtty',
-              member_id: replaceEmailTarget.id,
+              project_id: 'f5dcc382-8cc9-465a-b919-e58d6a688eea',
+              member_id: replaceEmailTarget.databaseId || replaceEmailTarget.id,
               action: 'replace',
               new_email: cleanNewEmail,
               confirm_member_name: replaceConfirmName.trim(),
@@ -744,8 +716,11 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
         }
       }
 
-      // Local server API fallback
-      if (!edgeSuccess && !isSupabaseConfigured) {
+      // No in-memory API fallback: production Vercel reads the authoritative Supabase registry.
+      if (!isSupabaseConfigured) {
+        edgeErrorMsg = 'Supabase belum terkonfigurasi.';
+      }
+      if (!edgeSuccess && false) {
         try {
           const res = await fetch('/api/admin/reset-member-email', {
             method: 'POST',
@@ -833,7 +808,7 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
     const duplicate = registeredEmails.find(
       (r) =>
         r.email.trim().toLowerCase() === cleanEmail &&
-        String(r.memberId || (r as any).member_id) !== String(registerEmailTarget.id)
+        String(r.memberId || '') !== String(registerEmailTarget.databaseId || registerEmailTarget.id)
     );
     if (duplicate) {
       pushToast(
@@ -851,30 +826,8 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
         cleanEmail,
         registerEmailTarget.position || registerEmailTarget.role,
         registerEmailTarget.division,
-        registerEmailTarget.id
+        registerEmailTarget.databaseId || registerEmailTarget.id
       );
-
-      await onUpdateMember({
-        ...registerEmailTarget,
-        email: cleanEmail,
-        registeredEmail: cleanEmail,
-        accountStatus: registerEmailTarget.id === 'm-4' ? 'active' : 'pending',
-      });
-
-      if (isSupabaseConfigured) {
-        try {
-          await supabase.from('member_email_history').insert({
-            member_id: registerEmailTarget.id,
-            member_name: registerEmailTarget.name,
-            previous_email: null,
-            replacement_email: cleanEmail,
-            action: 'REGISTER',
-            performed_by: user?.email || 'abhyy333@gmail.com',
-            reason: 'Pendaftaran email pertama kali oleh Super Admin',
-            created_at: new Date().toISOString(),
-          });
-        } catch {}
-      }
 
       await loadData();
       setRegisterEmailTarget(null);
@@ -975,54 +928,10 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
     setIsSavingMemberModal(true);
 
     try {
-      const cleanEmail = editMemEmail.trim().toLowerCase();
-      const prevEmail = (editingMemberModal.email || '').trim().toLowerCase();
-
-      // If administrator entered or changed the member's email, register/update in registered_emails
-      let nextAccountStatus = editingMemberModal.accountStatus;
-      if (cleanEmail) {
-        // Enforce uniqueness
-        const duplicate = registeredEmails.find(
-          (r) =>
-            r.email.trim().toLowerCase() === cleanEmail &&
-            String(r.memberId || (r as any).member_id) !== String(editingMemberModal.id)
-        );
-        if (duplicate) {
-          pushToast(
-            'error',
-            'Email Sudah Digunakan',
-            `Alamat email "${cleanEmail}" sudah terdaftar untuk anggota ${duplicate.name}. Gunakan alamat email unik.`
-          );
-          setIsSavingMemberModal(false);
-          return;
-        }
-
-        const existingReg = registeredEmails.find(
-          (r) => String(r.memberId || (r as any).member_id) === String(editingMemberModal.id)
-        );
-
-        if (existingReg) {
-          await updateRegisteredEmail(existingReg.id, {
-            email: cleanEmail,
-            name: editMemName.trim(),
-            position: editMemRole.trim(),
-            division: editMemDivision,
-          });
-          if (cleanEmail !== prevEmail && editingMemberModal.id !== 'm-4') {
-            nextAccountStatus = 'pending';
-          }
-        } else {
-          await registerMemberEmail(
-            editMemName.trim(),
-            cleanEmail,
-            editMemRole.trim(),
-            editMemDivision,
-            editingMemberModal.id
-          );
-          nextAccountStatus = editingMemberModal.id === 'm-4' ? 'active' : 'pending';
-        }
-      } else if (editingMemberModal.id !== 'm-4') {
-        nextAccountStatus = 'unregistered';
+      const currentEmail = (editingMemberModal.email || '').trim().toLowerCase();
+      const displayedEmail = editMemEmail.trim().toLowerCase();
+      if (displayedEmail !== currentEmail) {
+        throw new Error('Email login hanya dapat dikelola melalui tab Email Registration.');
       }
 
       const updatedMember: Member = {
@@ -1031,15 +940,11 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
         role: editMemRole.trim(),
         position: editMemRole.trim(),
         division: editMemDivision,
-        email: editingMemberModal.id === 'm-4' ? 'abhyy333@gmail.com' : cleanEmail,
-        registeredEmail:
-          editingMemberModal.id === 'm-4' ? 'abhyy333@gmail.com' : cleanEmail || undefined,
         phone: editMemPhone.trim(),
         nim: editMemNim.trim(),
         major: editMemMajor.trim(),
         faculty: editMemFaculty.trim(),
         avatar: editMemAvatar || editingMemberModal.avatar,
-        accountStatus: editingMemberModal.id === 'm-4' ? 'active' : nextAccountStatus,
         responsibilities: editMemResponsibilities
           .split('\n')
           .map((s) => s.trim())
@@ -1050,15 +955,11 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
       await logAdminActivity(
         'UPDATE_MEMBER_PROFILE',
         `${updatedMember.name} (${updatedMember.role})`,
-        `Memperbarui profil & email anggota. Email: ${updatedMember.email || 'Belum Didaftarkan'}`
+        'Memperbarui data profil anggota. Email login dikelola terpisah pada tab Email Registration.'
       );
       await loadData();
       setEditingMemberModal(null);
-      pushToast(
-        'success',
-        'Data Anggota Diperbarui',
-        `Profil dan email untuk ${updatedMember.name} berhasil disimpan ke Supabase.`
-      );
+      pushToast('success', 'Profil Anggota Diperbarui', `Profil ${updatedMember.name} berhasil diperbarui.`);
     } catch (err: any) {
       pushToast('error', 'Gagal Menyimpan Profil', err?.message || 'Terjadi kesalahan.');
     } finally {
@@ -1165,12 +1066,19 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
   const handleMemberSelectForReg = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const memId = e.target.value;
     setSelectedMemberId(memId);
-    const found = enrichedMembers.find((m) => m.id === memId);
+    const found = enrichedMembers.find((m) => String(m.databaseId || m.id) === memId);
     if (found) {
       setRegName(found.name);
-      setRegPosition(found.role);
+      setRegPosition(found.position || found.role);
       setRegDivision(found.division);
       setRegEmail(found.email || '');
+      return;
+    }
+    if (memId === 'c7bf53d4-1c27-424e-992a-7c7c0f98707a') {
+      setRegName(DPL_SUPERVISOR.name);
+      setRegPosition(DPL_SUPERVISOR.position);
+      setRegDivision('DPL / Supervisi');
+      setRegEmail(registeredEmails.find((r) => r.memberId === memId)?.email || '');
     }
   };
 
@@ -1213,7 +1121,7 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
 
       // Strictly update the matching member by member_id
       const targetMemId = selectedMemberId || created.memberId;
-      const targetMem = members.find((m) => m.id === targetMemId);
+      const targetMem = members.find((m) => String(m.databaseId || m.id) === String(targetMemId));
       if (targetMem) {
         await onUpdateMember({
           ...targetMem,
@@ -1221,21 +1129,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
           registeredEmail: created.email,
           accountStatus: targetMem.id === 'm-4' ? 'active' : 'pending',
         });
-      }
-
-      if (isSupabaseConfigured && targetMemId) {
-        try {
-          await supabase.from('member_email_history').insert({
-            member_id: targetMemId,
-            member_name: regName.trim(),
-            previous_email: null,
-            replacement_email: cleanEmail,
-            action: 'REGISTER',
-            performed_by: user?.email || 'abhyy333@gmail.com',
-            reason: 'Pendaftaran email melalui Tab Registrasi Email',
-            created_at: new Date().toISOString(),
-          });
-        } catch {}
       }
 
       await loadData();
@@ -1260,42 +1153,7 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
     }
   };
 
-  // Save Edited RegisteredEmailRecord from Table Modal
-  const handleSaveEditedRegRecord = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingRegRecord) return;
-    try {
-      const cleanEmail = editRegEmailVal.trim().toLowerCase();
-      await updateRegisteredEmail(editingRegRecord.id, {
-        email: cleanEmail,
-        name: editRegNameVal.trim(),
-        position: editRegPosVal.trim(),
-        division: editRegDivVal,
-      });
-
-      const targetMem = members.find((m) => m.id === editingRegRecord.memberId);
-      if (targetMem) {
-        await onUpdateMember({
-          ...targetMem,
-          name: editRegNameVal.trim(),
-          role: editRegPosVal.trim(),
-          division: editRegDivVal,
-          email: cleanEmail,
-          registeredEmail: cleanEmail,
-        });
-      }
-
-      await loadData();
-      setEditingRegRecord(null);
-      pushToast(
-        'success',
-        'Registrasi Email Diperbarui',
-        `Data email untuk ${editRegNameVal} berhasil diperbarui.`
-      );
-    } catch (err: any) {
-      pushToast('error', 'Gagal Memperbarui Email', err?.message || 'Terjadi kesalahan.');
-    }
-  };
+  // Email changes are available only through the dedicated Email Registration tab.
 
   // Filtered Lists
   const filteredMembers = useMemo(() => {
@@ -1997,16 +1855,14 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                 </div>
                 <div>
                   <label className="block text-[11px] font-medium text-stone-700 mb-1">
-                    Email Resmi Anggota (Kosongkan jika belum ada)
+                    Email Login (read-only)
                   </label>
-                  <input
-                    type="email"
-                    disabled={editingMemberModal.id === 'm-4'}
-                    value={editMemEmail}
-                    onChange={(e) => setEditMemEmail(e.target.value)}
-                    placeholder="Belum Didaftarkan"
-                    className="w-full px-3 py-2 rounded-lg border border-stone-200 font-mono text-[11px] focus:outline-none focus:border-[#4A6B53] disabled:bg-stone-100"
-                  />
+                  <div className="w-full px-3 py-2 rounded-lg border border-stone-200 bg-stone-50 font-mono text-[11px] text-stone-600">
+                    {editingMemberModal.email || 'Belum Didaftarkan'}
+                  </div>
+                  <p className="mt-1 text-[10px] text-stone-400">
+                    Registrasi, penggantian, dan penghapusan email hanya tersedia di tab Email Registration.
+                  </p>
                 </div>
               </div>
 
@@ -2183,99 +2039,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                   ))
               )}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* =====================================================================
-          EDIT REGISTERED EMAIL MODAL
-         ===================================================================== */}
-      {editingRegRecord && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl border border-[#E8E6DF] max-w-md w-full p-6 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
-              <h3 className="font-serif font-bold text-base text-stone-900">
-                Edit Rekaman Email Terdaftar
-              </h3>
-              <button
-                onClick={() => setEditingRegRecord(null)}
-                className="text-stone-400 hover:text-stone-700"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <form onSubmit={handleSaveEditedRegRecord} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-[11px] font-medium text-stone-700 mb-1">
-                  Alamat Email Resmi *
-                </label>
-                <input
-                  type="email"
-                  required
-                  disabled={editingRegRecord.email.toLowerCase() === 'abhyy333@gmail.com'}
-                  value={editRegEmailVal}
-                  onChange={(e) => setEditRegEmailVal(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-200 font-mono"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-stone-700 mb-1">
-                  Nama Anggota *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={editRegNameVal}
-                  onChange={(e) => setEditRegNameVal(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-200"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[11px] font-medium text-stone-700 mb-1">
-                    Jabatan *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={editRegPosVal}
-                    onChange={(e) => setEditRegPosVal(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-stone-200"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-medium text-stone-700 mb-1">
-                    Divisi *
-                  </label>
-                  <select
-                    value={editRegDivVal}
-                    onChange={(e) => setEditRegDivVal(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-stone-200 bg-white"
-                  >
-                    {DIVISIONS.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-3 border-t border-stone-100">
-                <button
-                  type="button"
-                  onClick={() => setEditingRegRecord(null)}
-                  className="px-3 py-1.5 rounded-lg border border-stone-200 text-stone-600"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 rounded-lg bg-[#284230] text-white font-semibold"
-                >
-                  Simpan Perubahan
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}
@@ -2497,78 +2260,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
       {/* =====================================================================
           DIRECT REGISTER EMAIL MODAL PER MEMBER
          ===================================================================== */}
-      {registerEmailTarget && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl border border-[#E8E6DF] max-w-md w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
-              <div className="flex items-center gap-2">
-                <Mail className="w-5 h-5 text-[#4A6B53]" />
-                <h3 className="font-serif font-bold text-base text-stone-900">
-                  Daftarkan Email Anggota
-                </h3>
-              </div>
-              <button
-                onClick={() => setRegisterEmailTarget(null)}
-                disabled={isSubmittingRegisterTarget}
-                className="text-stone-400 hover:text-stone-700 disabled:opacity-40"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-3.5 rounded-lg bg-[#FAF9F5] border border-[#E8E6DF] space-y-1.5 text-xs">
-              <div className="flex justify-between">
-                <span className="text-stone-500">Anggota:</span>
-                <span className="font-semibold text-stone-900">{registerEmailTarget.name}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-stone-500">Jabatan & Divisi:</span>
-                <span className="text-stone-700">{registerEmailTarget.role} — {registerEmailTarget.division}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-stone-500">NIM:</span>
-                <span className="font-mono text-stone-700">{registerEmailTarget.nim || '-'}</span>
-              </div>
-            </div>
-
-            <form onSubmit={handleExecuteRegisterTargetEmail} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-[11px] font-medium text-stone-700 mb-1">
-                  Alamat Email Resmi *
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={registerTargetEmailVal}
-                  onChange={(e) => setRegisterTargetEmailVal(e.target.value)}
-                  placeholder="Masukkan alamat email asli anggota..."
-                  disabled={isSubmittingRegisterTarget}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-200 font-mono text-xs focus:outline-none focus:border-[#4A6B53]"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-stone-100">
-                <button
-                  type="button"
-                  onClick={() => setRegisterEmailTarget(null)}
-                  disabled={isSubmittingRegisterTarget}
-                  className="px-3.5 py-2 rounded-lg border border-stone-200 text-stone-700 font-medium hover:bg-stone-50 text-xs"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmittingRegisterTarget || !registerTargetEmailVal.trim()}
-                  className="px-4 py-2 rounded-lg bg-[#4A6B53] text-white font-semibold hover:bg-[#3d5944] disabled:opacity-50 text-xs"
-                >
-                  {isSubmittingRegisterTarget ? 'Mendaftarkan...' : 'Daftarkan Email'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* =====================================================================
           DEDICATED READ-ONLY MEMBER EMAIL HISTORY PANEL
          ===================================================================== */}
@@ -4025,59 +3716,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
 
                         <td className="py-3 px-4">
                           <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                            {/* Action: Daftarkan Email (if member has no email) */}
-                            {!m.email && (
-                              <button
-                                onClick={() => handleOpenRegisterTargetEmail(m)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-[#4A6B53] hover:bg-[#3d5944] text-white font-medium text-[11px] transition-colors"
-                              >
-                                <Mail className="w-3 h-3" />
-                                <span>Daftarkan Email</span>
-                              </button>
-                            )}
-
-                            {/* Action: Ganti Email (if member has registered email) */}
-                            {m.email && (
-                              isProtected ? (
-                                <span
-                                  className="inline-flex items-center gap-1 px-2 py-1 rounded border border-stone-200 text-stone-400 text-[11px] cursor-not-allowed"
-                                  title="Akun Super Admin utama dilindungi dan tidak dapat direset"
-                                >
-                                  <Lock className="w-3 h-3" />
-                                  <span>Ganti Email</span>
-                                </span>
-                              ) : (
-                                <button
-                                  onClick={() => handleOpenReplaceEmail(m)}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-[#E8E6DF] bg-white hover:bg-stone-50 text-stone-700 font-medium text-[11px] transition-colors"
-                                >
-                                  <RotateCcw className="w-3 h-3 text-stone-400" />
-                                  <span>Ganti Email</span>
-                                </button>
-                              )
-                            )}
-
-                            {/* Action: Hapus Email (if member has registered email and not protected) */}
-                            {m.email && !isProtected && (
-                              <button
-                                onClick={() => handleOpenRemoveEmail(m)}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-200 bg-white hover:bg-red-50 text-red-600 font-medium text-[11px] transition-colors"
-                              >
-                                <Trash2 className="w-3 h-3 text-red-400" />
-                                <span>Hapus Email</span>
-                              </button>
-                            )}
-
-                            {/* Action: Riwayat Email (Dedicated Read-Only History Panel) */}
-                            <button
-                              onClick={() => handleOpenEmailHistory(m)}
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[#E8E6DF] bg-white text-stone-600 hover:bg-stone-50 text-[11px] transition-colors"
-                              title="Lihat riwayat audit email anggota"
-                            >
-                              <History className="w-3 h-3 text-stone-400" />
-                              <span>Riwayat Email</span>
-                            </button>
-
                             {/* Action: Edit Profil Lengkap */}
                             <button
                               onClick={() => openEditMemberModal(m)}
@@ -4127,10 +3765,13 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                 >
                   <option value="">-- Pilih Anggota KKN --</option>
                   {enrichedMembers.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name} — {m.role} ({m.email ? m.email : 'Belum Didaftarkan'})
+                    <option key={m.databaseId || m.id} value={m.databaseId || m.id}>
+                      {m.name} — {m.position || m.role} ({m.email || 'Belum Didaftarkan'})
                     </option>
                   ))}
+                  <option value="c7bf53d4-1c27-424e-992a-7c7c0f98707a">
+                    {DPL_SUPERVISOR.name} — Dosen Pembimbing Lapangan ({registeredEmails.find((r) => r.memberId === 'c7bf53d4-1c27-424e-992a-7c7c0f98707a')?.email || 'Belum Didaftarkan'})
+                  </option>
                 </select>
               </div>
 
@@ -4267,23 +3908,42 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                           <div className="flex items-center justify-end gap-1">
                             <button
                               onClick={() => {
-                                setEditingRegRecord(rec);
-                                setEditRegEmailVal(rec.email);
-                                setEditRegNameVal(rec.name);
-                                setEditRegPosVal(rec.position);
-                                setEditRegDivVal(rec.division);
+                                const matchedMember = enrichedMembers.find(
+                                  (m) => String(m.databaseId || m.id) === String(rec.memberId)
+                                );
+                                if (matchedMember) handleOpenReplaceEmail(matchedMember);
+                                else pushToast('error', 'Profil Anggota Tidak Ditemukan', 'Muat ulang data anggota lalu coba lagi.');
                               }}
                               className="p-1.5 rounded border border-[#E8E6DF] text-stone-600 hover:bg-stone-50"
-                              title="Edit email/jabatan"
+                              title="Ganti email login"
                             >
-                              <Edit3 className="w-3.5 h-3.5" />
+                              <RotateCcw className="w-3.5 h-3.5" />
                             </button>
                             {!isPrimaryAdmin && (
                               <button
                                 onClick={() => {
                                   const matchedMem = enrichedMembers.find(
-                                    (m) => m.id === rec.memberId || m.email === rec.email
-                                  );
+                                    (m) => String(m.databaseId || m.id) === String(rec.memberId)
+                                  ) || (rec.memberId === 'c7bf53d4-1c27-424e-992a-7c7c0f98707a'
+                                    ? ({
+                                        id: rec.memberId,
+                                        databaseId: rec.memberId,
+                                        name: DPL_SUPERVISOR.name,
+                                        role: DPL_SUPERVISOR.position,
+                                        position: DPL_SUPERVISOR.position,
+                                        division: 'DPL / Supervisi',
+                                        email: rec.email,
+                                        registeredEmail: rec.email,
+                                        major: DPL_SUPERVISOR.faculty,
+                                        faculty: DPL_SUPERVISOR.faculty,
+                                        nim: '',
+                                        phone: '',
+                                        avatar: '',
+                                        emergencyContact: '',
+                                        status: 'active',
+                                        regRecord: rec,
+                                      } as Member & { regRecord: RegisteredEmailRecord })
+                                    : undefined);
                                   if (matchedMem) {
                                     handlePromptDeleteAuthAccount(matchedMem);
                                   }
