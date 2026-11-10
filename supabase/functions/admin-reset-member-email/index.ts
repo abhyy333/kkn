@@ -322,6 +322,7 @@ Deno.serve(async (req: Request) => {
       return new Response(
         JSON.stringify({
           success: true,
+          changed: true,
           action: 'remove',
           member_id: targetMemberId,
           member_name: memberName,

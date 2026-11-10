@@ -53,9 +53,11 @@ export interface RegisteredEmailRecord {
   id: string; // sanitized email or unique id
   email: string;
   name: string;
+  full_name?: string;
   position: string;
   division: string;
   memberId?: string;
+  member_id?: string;
   systemRole?: SystemRole;
   registeredBy: string;
   registeredAt: string;
@@ -191,6 +193,7 @@ export interface NavSection {
 
 export interface Member {
   id: string;
+  dbId?: string;
   name: string;
   role: string;
   position?: string;

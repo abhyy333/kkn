@@ -7,7 +7,7 @@ import {
   normalizeRegisteredEmailRow,
   isFabricatedLegacyRecord,
 } from '../lib/supabase';
-import { INITIAL_MEMBERS } from '../data/mockData';
+import { INITIAL_MEMBERS, OFFICIAL_PROJECT_ID } from '../data/mockData';
 import {
   RegisteredEmailRecord as TypesRegisteredEmailRecord,
   AdminActivityLogRecord,
@@ -218,15 +218,19 @@ function sanitizeEmailId(email: string): string {
 
 function toAppRegisteredEmailRecord(row: Record<string, any>): RegisteredEmailRecord {
   const normalized = normalizeRegisteredEmailRow(row);
+  const rawMemberId = row.member_id || row.memberId || normalized.memberId;
+  const fullName = row.full_name || row.member_name || normalized.name;
   return {
     id: normalized.id || sanitizeEmailId(normalized.email),
     email: normalized.email,
-    name: normalized.name,
+    name: fullName,
+    full_name: fullName,
     position: normalized.position,
     division: normalized.division,
     role: normalized.role,
     systemRole: normalized.systemRole,
-    memberId: normalized.memberId,
+    memberId: rawMemberId,
+    member_id: rawMemberId,
     registeredBy: normalized.registeredBy,
     registeredAt: normalized.registeredAt,
     status:
@@ -398,12 +402,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const fetchRegisteredEmails = async (): Promise<RegisteredEmailRecord[]> => {
-    const mergedMap = new Map<string, RegisteredEmailRecord>();
-    getLocalRegisteredEmails().forEach((item) => {
-      if (!isFabricatedLegacyRecord(item)) {
-        mergedMap.set(item.email.toLowerCase(), item);
-      }
-    });
+    let finalEmails: RegisteredEmailRecord[] = [];
 
     if (isSupabaseConfigured) {
       try {
@@ -411,19 +410,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .from('registered_emails')
           .select('*');
 
-        if (!sbErr && Array.isArray(sbRows) && sbRows.length > 0) {
-          sbRows.forEach((row) => {
-            if (isFabricatedLegacyRecord(row)) return;
-            const normalized = toAppRegisteredEmailRecord(row);
-            if (normalized.email) {
-              mergedMap.set(normalized.email.toLowerCase(), normalized);
-            }
-          });
+        if (!sbErr && Array.isArray(sbRows)) {
+          finalEmails = sbRows
+            .filter((row) => !isFabricatedLegacyRecord(row))
+            .map((row) => toAppRegisteredEmailRecord(row))
+            .filter((rec) => Boolean(rec.email));
+
+          setRegisteredEmails(finalEmails);
+          saveLocalRegisteredEmails(finalEmails);
+          return finalEmails;
         }
       } catch (err) {
         console.warn('Supabase registered_emails fetch notice:', err);
       }
     }
+
+    // Fallback if Supabase is not configured or failed
+    const mergedMap = new Map<string, RegisteredEmailRecord>();
+    getLocalRegisteredEmails().forEach((item) => {
+      if (!isFabricatedLegacyRecord(item)) {
+        mergedMap.set(item.email.toLowerCase(), item);
+      }
+    });
 
     try {
       const res = await fetch('/api/admin/registered-emails');
@@ -436,8 +444,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const mapped = toAppRegisteredEmailRecord(item);
             if (mapped.email) {
               const key = mapped.email.toLowerCase();
-              const existing = mergedMap.get(key);
-              mergedMap.set(key, existing ? { ...mapped, ...existing } : mapped);
+              mergedMap.set(key, mapped);
             }
           });
         }
@@ -446,7 +453,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Fallback to local
     }
 
-    const finalEmails = Array.from(mergedMap.values()).filter(
+    finalEmails = Array.from(mergedMap.values()).filter(
       (r) => !isFabricatedLegacyRecord(r)
     );
     setRegisteredEmails(finalEmails);
@@ -1909,47 +1916,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (isSupabaseConfigured) {
       try {
-        // 1. Delete Auth user via Supabase Edge Function (uses Supabase Admin API server-side)
-        await supabase.functions
-          .invoke('admin-manage-account', {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData?.session?.access_token;
+        const { data, error } = await supabase.functions.invoke(
+          'admin-reset-member-email',
+          {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
             body: {
-              action: 'delete',
-              email: targetEmail,
-              uid: targetUid,
-              memberId: targetMemberId,
+              project_id: OFFICIAL_PROJECT_ID,
+              member_id: targetMemberId,
+              action: 'remove',
+              confirm_member_name: targetRec?.name,
+              reason: 'Penghapusan email oleh Super Admin',
             },
-          })
-          .catch(() => {});
-
-        // 2. Remove email registration & member_access rows
-        if (targetEmail.includes('@')) {
-          await supabase
-            .from('registered_emails')
-            .delete()
-            .ilike('email', targetEmail);
-
-          await supabase
-            .from('member_access')
-            .delete()
-            .ilike('email', targetEmail);
+          }
+        );
+        if (error) {
+          let detail = error.message;
+          try {
+            const errBody = await (error as any).context?.json();
+            if (errBody?.error) detail = errBody.error;
+          } catch {}
+          throw new Error(detail);
         }
-
-        // 3. Unlink Auth account from member record while preserving the member and all historical records
-        if (targetMemberId) {
-          await supabase
-            .from('members')
-            .update({
-              email: '',
-              registered_email: '',
-              account_status: 'unregistered',
-              accountStatus: 'unregistered',
-              auth_uid: null,
-              authUid: null,
-            })
-            .eq('id', targetMemberId);
+        if (!data?.success) {
+          throw new Error(data?.error || 'Pencabutan email gagal');
         }
-      } catch (e) {
+      } catch (e: any) {
         console.warn('Supabase deleteMemberAccount notice:', e);
+        throw e;
       }
     }
 

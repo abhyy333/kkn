@@ -678,6 +678,7 @@ async function startServer() {
 
       return res.json({
         success: true,
+        changed: true,
         action: 'remove',
         member_id,
         previous_email: prevEmail,

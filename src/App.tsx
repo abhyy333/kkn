@@ -428,8 +428,16 @@ function AppContent() {
             candidateEmail && !isFabricatedLegacyRecord({ email: candidateEmail })
               ? candidateEmail
               : existing.email;
+          const dbUuid =
+            rawM.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawM.id)
+              ? rawM.id
+              : rawM.member_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawM.member_id)
+              ? rawM.member_id
+              : existing.dbId;
+
           memberMap.set(targetId, {
             ...existing,
+            dbId: dbUuid,
             name: candidateName || existing.name,
             role: rawM.role && rawM.role !== 'member' ? rawM.role : rawM.position || existing.role,
             position: rawM.position || existing.position,
@@ -465,13 +473,32 @@ function AppContent() {
         }
       } catch {}
 
-      const allVerifiedRegs = [...localRegs, ...sbRegisteredEmails.filter((r) => !isFabricatedLegacyRecord(r))];
+      const allVerifiedRegs =
+        sbRegisteredEmails.length > 0
+          ? sbRegisteredEmails.filter((r) => !isFabricatedLegacyRecord(r))
+          : localRegs;
       allVerifiedRegs.forEach((reg) => {
         if (!reg || typeof reg !== 'object') return;
         const regEmail = String(reg.email || '').trim().toLowerCase();
         if (!regEmail) return;
         const regMemberId = String(reg.member_id || reg.memberId || '').trim();
-        if (!regMemberId || !memberMap.has(regMemberId)) return;
+
+        let targetMemberId = memberMap.has(regMemberId) ? regMemberId : undefined;
+        if (!targetMemberId) {
+          for (const [id, m] of memberMap.entries()) {
+            if (
+              (m.dbId && m.dbId === regMemberId) ||
+              (m.email && m.email.toLowerCase() === regEmail) ||
+              (reg.name && m.name.toLowerCase() === String(reg.name).toLowerCase()) ||
+              (reg.full_name && m.name.toLowerCase() === String(reg.full_name).toLowerCase())
+            ) {
+              targetMemberId = id;
+              break;
+            }
+          }
+        }
+
+        if (!targetMemberId || !memberMap.has(targetMemberId)) return;
 
         const isDisabled = reg.status === 'disabled' || reg.is_active === false;
         const isActivated =
@@ -480,9 +507,11 @@ function AppContent() {
             reg.status === 'active' ||
             Boolean(reg.activated_uid || reg.activatedUid || reg.auth_user_id));
 
-        const m = memberMap.get(regMemberId)!;
-        memberMap.set(regMemberId, {
+        const m = memberMap.get(targetMemberId)!;
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(regMemberId);
+        memberMap.set(targetMemberId, {
           ...m,
+          dbId: isUuid ? regMemberId : m.dbId,
           email: regEmail,
           registeredEmail: regEmail,
           accountStatus: isDisabled

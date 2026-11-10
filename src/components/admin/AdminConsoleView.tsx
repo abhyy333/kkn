@@ -22,7 +22,8 @@ import {
   InventoryRecord,
   AnnouncementRecord,
 } from '../../types';
-import { DPL_SUPERVISOR } from '../../data/mockData';
+import { DPL_SUPERVISOR, OFFICIAL_PROJECT_ID, OFFICIAL_DPL_MEMBER_ID } from '../../data/mockData';
+const PROJECT_ID = OFFICIAL_PROJECT_ID;
 import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { FileUploader } from '../common/FileUploader';
 import {
@@ -528,6 +529,84 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
   // EMAIL MANAGEMENT ACTIONS (Hapus Email, Ganti Email, Daftarkan Email, Riwayat)
   // ---------------------------------------------------------------------------
 
+  // Helper to ensure database UUID is used (never mock ID like m-4)
+  const isUuid = (id?: string) =>
+    Boolean(id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+
+  const resolveDatabaseMemberId = async (
+    candidateId?: string,
+    candidateName?: string,
+    candidateEmail?: string
+  ): Promise<string> => {
+    if (isUuid(candidateId)) return candidateId!;
+    if (
+      candidateEmail?.toLowerCase() === 'ellymaelani@gmail.com' ||
+      candidateName?.toLowerCase().includes('lalu muhammad aby dujana')
+    ) {
+      return OFFICIAL_DPL_MEMBER_ID;
+    }
+
+    // Check in-memory registeredEmails for member_id UUID
+    const regMatch = registeredEmails.find(
+      (r) =>
+        (candidateEmail && r.email?.toLowerCase() === candidateEmail.toLowerCase()) ||
+        (candidateName && (r.name?.toLowerCase() === candidateName.toLowerCase() || (r as any).full_name?.toLowerCase() === candidateName.toLowerCase()))
+    );
+    if (regMatch) {
+      const regMemberId = (regMatch as any).member_id || regMatch.memberId;
+      if (isUuid(regMemberId)) return regMemberId;
+    }
+
+    const matchedMem = members.find(
+      (m) =>
+        (m.email && candidateEmail && m.email.toLowerCase() === candidateEmail.toLowerCase()) ||
+        (m.name && candidateName && m.name.toLowerCase() === candidateName.toLowerCase())
+    );
+    if (matchedMem && isUuid(matchedMem.id)) return matchedMem.id;
+    if (matchedMem && (matchedMem as any).dbId && isUuid((matchedMem as any).dbId)) return (matchedMem as any).dbId;
+
+    if (isSupabaseConfigured) {
+      try {
+        if (candidateEmail) {
+          // Check registered_emails table for authoritative member_id UUID
+          const { data: regData } = await supabase
+            .from('registered_emails')
+            .select('member_id')
+            .ilike('email', candidateEmail)
+            .maybeSingle();
+          if (regData?.member_id && isUuid(regData.member_id)) return regData.member_id;
+
+          // Check members table by email
+          const { data } = await supabase
+            .from('members')
+            .select('id')
+            .ilike('email', candidateEmail)
+            .maybeSingle();
+          if (data?.id && isUuid(data.id)) return data.id;
+        }
+        if (candidateName) {
+          const { data } = await supabase
+            .from('members')
+            .select('id')
+            .ilike('name', candidateName)
+            .maybeSingle();
+          if (data?.id && isUuid(data.id)) return data.id;
+        }
+      } catch (err) {
+        console.warn('Supabase member UUID lookup notice:', err);
+      }
+    }
+
+    return candidateId || '';
+  };
+
+  // Muat ulang data registry dari Supabase
+  const refreshRegisteredEmails = async () => {
+    const freshEmails = await fetchRegisteredEmails();
+    setRegisteredEmails(freshEmails);
+    await loadData();
+  };
+
   // 1. Open "Hapus Email" Modal
   const handleOpenRemoveEmail = (m: Member & { regRecord?: RegisteredEmailRecord }) => {
     if (isProtectedSuperAdmin(m)) {
@@ -536,7 +615,47 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
     }
     setRemoveEmailTarget(m);
     setRemoveConfirmName('');
-    setRemoveReason('');
+    setRemoveReason('Penghapusan email oleh Super Admin');
+  };
+
+  // 1b. Open "Hapus Email" Modal from Email Registration Table (Tab 3)
+  const handleOpenRemoveEmailForReg = (rec: RegisteredEmailRecord) => {
+    if (rec.email.toLowerCase() === 'abhyy333@gmail.com' || rec.systemRole === 'super_admin') {
+      pushToast(
+        'error',
+        'Aksi Ditolak',
+        'Akun Super Admin utama (Abdul Habir Al Majdi) dilindungi dan tidak dapat dihapus.'
+      );
+      return;
+    }
+
+    const matchedMem = members.find(
+      (m) =>
+        m.id === rec.memberId ||
+        m.id === (rec as any).member_id ||
+        (m.email && m.email.toLowerCase() === rec.email.toLowerCase())
+    );
+
+    const target: Member & { regRecord?: RegisteredEmailRecord } = matchedMem
+      ? { ...matchedMem, regRecord: rec }
+      : {
+          id: (rec as any).member_id || rec.memberId || rec.id,
+          name: rec.name,
+          role: rec.position || 'Anggota',
+          division: rec.division || 'Umum',
+          major: '',
+          faculty: '',
+          nim: '',
+          phone: '',
+          email: rec.email,
+          registeredEmail: rec.email,
+          emergencyContact: '',
+          avatar: '',
+          status: 'active',
+          regRecord: rec,
+        };
+
+    handleOpenRemoveEmail(target);
   };
 
   // Execute "Hapus Email" (Remove)
@@ -561,77 +680,78 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
 
     setIsSubmittingRemove(true);
     try {
-      let edgeSuccess = false;
-      let edgeErrorMsg = '';
+      const rawTargetId =
+        removeEmailTarget.regRecord?.member_id ||
+        removeEmailTarget.regRecord?.memberId ||
+        removeEmailTarget.id;
 
-      // Invoke Supabase Edge Function: admin-reset-member-email
+      const targetMemberId = await resolveDatabaseMemberId(
+        rawTargetId,
+        removeEmailTarget.name,
+        removeEmailTarget.email
+      );
+
+      const selectedRecord = {
+        member_id: targetMemberId,
+        full_name: removeEmailTarget.name,
+        email: removeEmailTarget.email,
+      };
+
       if (isSupabaseConfigured) {
-        try {
-          const { data: sessionData } = await supabase.auth.getSession();
-          const token = sessionData?.session?.access_token;
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData?.session?.access_token;
 
-          const { data, error } = await supabase.functions.invoke('admin-reset-member-email', {
+        const { data, error } = await supabase.functions.invoke(
+          'admin-reset-member-email',
+          {
             headers: token ? { Authorization: `Bearer ${token}` } : undefined,
             body: {
-              project_id: 'scslevzuxxkfcuvwbtty',
-              member_id: removeEmailTarget.id,
+              project_id: PROJECT_ID,
+              member_id: selectedRecord.member_id,
               action: 'remove',
-              confirm_member_name: removeConfirmName.trim(),
-              reason: removeReason.trim() || undefined,
+              confirm_member_name: selectedRecord.full_name,
+              reason: removeReason.trim() || 'Penghapusan email oleh Super Admin',
             },
-          });
-          if (!error && (data?.success || (!data?.error && data?.action === 'remove'))) {
-            edgeSuccess = true;
-          } else if (error) {
-            let detail = error.message;
-            try {
-              const errBody = await (error as any).context?.json();
-              if (errBody?.error) detail = errBody.error;
-            } catch {}
-            edgeErrorMsg = detail;
-          } else if (data?.error) {
-            edgeErrorMsg = data.error;
           }
-        } catch (err: any) {
-          edgeErrorMsg = err?.message || 'Gagal memanggil Edge Function';
+        );
+
+        if (error) {
+          let detail = error.message;
+          try {
+            const errBody = await (error as any).context?.json();
+            if (errBody?.error) detail = errBody.error;
+            else if (errBody?.message) detail = errBody.message;
+          } catch {}
+          throw new Error(detail);
+        }
+
+        const isChanged = data?.changed !== undefined ? data.changed : data?.success;
+        if (!data?.success || !isChanged) {
+          throw new Error(data?.error || data?.message || 'Penghapusan gagal');
+        }
+      } else {
+        // Local server API fallback if Supabase Edge Function is not configured
+        const res = await fetch('/api/admin/reset-member-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'remove',
+            member_id: selectedRecord.member_id,
+            confirm_member_name: selectedRecord.full_name,
+            reason: removeReason.trim() || 'Penghapusan email oleh Super Admin',
+            actorEmail: user?.email || 'abhyy333@gmail.com',
+          }),
+        });
+        const resData = await res.json();
+        if (!res.ok || !resData.success) {
+          throw new Error(resData.error || 'Server error saat menghapus email');
         }
       }
 
-      // Local server API fallback if Edge Function wasn't invoked
-      if (!edgeSuccess && !isSupabaseConfigured) {
-        try {
-          const res = await fetch('/api/admin/reset-member-email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'remove',
-              member_id: removeEmailTarget.id,
-              confirm_member_name: removeConfirmName.trim(),
-              reason: removeReason.trim() || undefined,
-              actorEmail: user?.email || 'abhyy333@gmail.com',
-            }),
-          });
-          const resData = await res.json();
-          if (res.ok && resData.success) {
-            edgeSuccess = true;
-          } else {
-            edgeErrorMsg = resData.error || 'Server error';
-          }
-        } catch (srvErr: any) {
-          edgeErrorMsg = srvErr?.message || 'Gagal terhubung ke server';
-        }
-      }
+      // Muat ulang data registry dari Supabase tanpa reload halaman
+      await refreshRegisteredEmails();
 
-      if (!edgeSuccess) {
-        pushToast('error', 'Gagal Menghapus Email', edgeErrorMsg || 'Terjadi kesalahan saat menghapus email.');
-        setIsSubmittingRemove(false);
-        return;
-      }
-
-      // Refetch fresh database state
-      await loadData();
-
-      // Update parent state
+      // Update parent state (preserving all profile details, setting status to pending)
       await onUpdateMember({
         ...removeEmailTarget,
         email: '',
@@ -643,19 +763,19 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
 
       await logAdminActivity(
         'REMOVE_MEMBER_EMAIL',
-        `${removeEmailTarget.name} (${removeEmailTarget.id})`,
-        `Alamat email login dan akun autentikasi dihapus. Profil dipertahankan. Alasan: ${removeReason || 'Reset email'}`
+        `${selectedRecord.full_name} (${selectedRecord.member_id})`,
+        `Alamat email login (${selectedRecord.email}) dan akun autentikasi dihapus via admin-reset-member-email. Profil dipertahankan. Alasan: ${removeReason || 'Penghapusan email oleh Super Admin'}`
       );
 
       setRemoveEmailTarget(null);
       setRemoveConfirmName('');
       setRemoveReason('');
 
-      // Display EXACTLY ONE success toast
+      // Display EXACTLY ONE success toast only after successful backend response
       pushToast(
         'success',
         'Email Berhasil Dihapus',
-        `Alamat email untuk ${removeEmailTarget.name} telah dihapus. Profil anggota tetap dipertahankan dan status akun kembali ke Menunggu Aktivasi.`
+        `Alamat email untuk ${selectedRecord.full_name} telah dihapus. Profil anggota tetap dipertahankan dan status akun kembali ke Menunggu Aktivasi.`
       );
     } catch (err: any) {
       pushToast('error', 'Gagal Menghapus Email', err?.message || 'Terjadi kesalahan sistem.');
@@ -1123,42 +1243,9 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
     }
   };
 
-  // Handle Permanent Auth Account Deletion
+  // Handle Permanent Auth Account Deletion (Delegates to centralized Hapus Email modal using admin-reset-member-email)
   const handlePromptDeleteAuthAccount = (m: Member & { regRecord?: RegisteredEmailRecord }) => {
-    if (isProtectedSuperAdmin(m)) {
-      pushToast(
-        'error',
-        'Aksi Ditolak',
-        'Akun Super Admin utama atau Super Admin terakhir tidak dapat dihapus.'
-      );
-      return;
-    }
-
-    openConfirmDialog({
-      title: `Hapus Permanen Akun Auth — ${m.name}`,
-      description: `Tindakan ini akan menghapus akun pengguna dari Supabase Auth melalui Edge Function Admin API serta menghapus pendaftaran email (${m.email || '-'}) dari tabel registered_emails dan member_access. Profil posisi anggota di tim KKN serta seluruh riwayat tugas, rapat, survei, dan laporan tetap dipertahankan secara utuh.`,
-      confirmLabel: 'Hapus Akun Auth Permanen',
-      variant: 'danger',
-      requireTypedText: 'HAPUS',
-      onConfirm: async () => {
-        await deleteMemberAccount(m.email || m.id);
-        await onUpdateMember({
-          ...m,
-          email: '',
-          registeredEmail: undefined,
-          authUid: undefined,
-          accountStatus: 'unregistered',
-          acceptedAt: undefined,
-          disabledAt: undefined,
-        });
-        await loadData();
-        pushToast(
-          'success',
-          'Akun Auth Dihapus Permanen',
-          `Akun login dan registrasi email ${m.name} telah dihapus. Status kembali ke "Belum Didaftarkan" & riwayat kontribusi tetap tersimpan.`
-        );
-      },
-    });
+    handleOpenRemoveEmail(m);
   };
 
   // Handle Quick Member Selection in Email Registration Form
@@ -4240,13 +4327,45 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                 <tbody className="divide-y divide-stone-100">
                   {filteredRegisteredEmails.map((rec) => {
                     const isPrimaryAdmin = rec.email.toLowerCase() === 'abhyy333@gmail.com';
+                    // Link registry directly with members table record
+                    const recMemberId = (rec as any).member_id || rec.memberId;
+                    const matchedMem = members.find(
+                      (m) =>
+                        (recMemberId && (m.id === recMemberId || (m as any).dbId === recMemberId)) ||
+                        (m.email && m.email.toLowerCase() === rec.email.toLowerCase())
+                    );
+
+                    const member: Member & { regRecord?: RegisteredEmailRecord } = matchedMem
+                      ? {
+                          ...matchedMem,
+                          id: (matchedMem as any).dbId || (isUuid(matchedMem.id) ? matchedMem.id : (recMemberId || matchedMem.id)),
+                          email: rec.email,
+                          regRecord: rec,
+                        }
+                      : {
+                          id: recMemberId || rec.id,
+                          name: (rec as any).full_name || rec.name,
+                          role: rec.position || 'Anggota',
+                          division: rec.division || 'Umum',
+                          major: '',
+                          faculty: '',
+                          nim: '',
+                          phone: '',
+                          email: rec.email,
+                          registeredEmail: rec.email,
+                          emergencyContact: '',
+                          avatar: '',
+                          status: 'active',
+                          regRecord: rec,
+                        };
+
                     return (
                       <tr key={rec.id} className="hover:bg-stone-50/70">
                         <td className="py-3 px-3 font-mono text-stone-900">
                           {rec.email}
                         </td>
                         <td className="py-3 px-3">
-                          <div className="font-medium text-stone-900">{rec.name}</div>
+                          <div className="font-medium text-stone-900">{rec.name || (rec as any).full_name}</div>
                           <div className="text-[11px] text-stone-500">
                             {rec.position} · {rec.division}
                           </div>
@@ -4266,10 +4385,11 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                         <td className="py-3 px-3 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <button
+                              type="button"
                               onClick={() => {
                                 setEditingRegRecord(rec);
                                 setEditRegEmailVal(rec.email);
-                                setEditRegNameVal(rec.name);
+                                setEditRegNameVal(rec.name || (rec as any).full_name || '');
                                 setEditRegPosVal(rec.position);
                                 setEditRegDivVal(rec.division);
                               }}
@@ -4280,18 +4400,13 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                             </button>
                             {!isPrimaryAdmin && (
                               <button
-                                onClick={() => {
-                                  const matchedMem = enrichedMembers.find(
-                                    (m) => m.id === rec.memberId || m.email === rec.email
-                                  );
-                                  if (matchedMem) {
-                                    handlePromptDeleteAuthAccount(matchedMem);
-                                  }
-                                }}
-                                className="p-1.5 rounded border border-red-200 text-red-600 hover:bg-red-50"
-                                title="Hapus registrasi email & akun Auth"
+                                type="button"
+                                onClick={() => handleOpenRemoveEmail(member)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 text-[11px] font-medium transition-colors"
+                                title="Hapus email login anggota"
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                                <span>Hapus Email</span>
                               </button>
                             )}
                           </div>
