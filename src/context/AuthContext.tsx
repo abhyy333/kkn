@@ -758,14 +758,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       hadActiveSessionRef.current = true;
       setSession(validSession);
 
-      // 3. Fast path: Hydrate immediately from cached profile for this authenticated UID so UI never blocks
-      const cachedProfile = getCachedProfile(sbUser.id, sbUser.email);
-      if (cachedProfile) {
-        setProfile(cachedProfile);
-        setUser(mapSupabaseUserToAppUser(sbUser, cachedProfile.displayName));
-        setLoading(false);
-      }
-
+      // Authorization is always reloaded from live members/member_access/admin_accounts rows.
       // 4. Resolve / verify authorization in a single deduplicated query
       try {
         const resolvedProfile = await resolveDatabaseProfileForUser(sbUser, true);
