@@ -427,9 +427,9 @@ function AppContent() {
                 setDplSupervisorRecord(supervisor);
                 setUnitConfig((prev) => ({
                   ...prev,
-                  dplName: supervisor.name || supervisor.full_name || prev.dplName,
-                  dplNip: supervisor.nip || supervisor.employee_id || prev.dplNip,
-                  faculty: supervisor.program_study || supervisor.major || supervisor.faculty || prev.faculty,
+                  dplName: supervisor.full_name || prev.dplName,
+                  dplNip: supervisor.institutional_id || prev.dplNip,
+                  faculty: supervisor.faculty || prev.faculty,
                 }));
               }
 
@@ -452,9 +452,9 @@ function AppContent() {
               setDplSupervisorRecord(data);
               setUnitConfig((prev) => ({
                 ...prev,
-                dplName: data.name || data.full_name || 'Lalu Muhammad Aby Dujana, M.Si.',
-                dplNip: data.nip || data.employee_id || '198910222024061001',
-                faculty: data.program_study || data.major || data.faculty || 'S1 Ilmu Lingkungan',
+                dplName: data.full_name || prev.dplName,
+                dplNip: data.institutional_id || prev.dplNip,
+                faculty: data.faculty || prev.faculty,
               }));
             }
           },
@@ -666,6 +666,11 @@ function AppContent() {
   }, [user?.uid, isSuperAdmin, dplSupervisorRecord?.id]);
 
   const handleSaveDocumentationAlbums = async (nextAlbums: DocumentationAlbum[]) => {
+    const nextIds = new Set(nextAlbums.map((album) => album.id));
+    const removedAlbums = documentationAlbums.filter((album) => !nextIds.has(album.id));
+    for (const album of removedAlbums) {
+      await deleteWorkspaceRecord('documentation_albums', album.id);
+    }
     for (const album of nextAlbums) {
       await upsertWorkspaceRecord('documentation_albums', album);
     }
@@ -716,96 +721,31 @@ function AppContent() {
     notes: string,
     status: ReportRecord['status']
   ) => {
-    const nowIso = new Date().toISOString();
-    const reviewerName = unitConfig.dplName || 'Lalu Muhammad Aby Dujana, M.Si.';
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase belum terkonfigurasi. Penilaian laporan tidak dapat disimpan.');
+    }
 
-    // Map status to Edge Function decision: 'approved' | 'revision_requested' | 'rejected'
     const decision: 'approved' | 'revision_requested' | 'rejected' =
       status === 'approved' || status === 'approved_by_dpl'
         ? 'approved'
         : status === 'rejected'
-        ? 'rejected'
-        : 'revision_requested';
+          ? 'rejected'
+          : 'revision_requested';
 
-    // 1. Invoke backend Edge Function dpl-report-review via Supabase Functions API
-    if (isSupabaseConfigured) {
-      try {
-        const { data: edgeRes, error: edgeErr } = await supabase.functions.invoke(
-          'dpl-report-review',
-          {
-            body: {
-              report_id: reportId,
-              decision,
-              feedback: notes,
-            },
-          }
-        );
-        if (edgeErr) {
-          console.warn('Notice from dpl-report-review Edge Function (falling back to direct sync):', edgeErr);
-        } else if (edgeRes) {
-          console.info('dpl-report-review Edge Function response:', edgeRes);
-        }
-      } catch (invokeErr) {
-        console.warn('Network call to dpl-report-review Edge Function notice:', invokeErr);
-      }
-    }
-
-    setReports((prev) =>
-      prev.map((r) => {
-        if (r.id !== reportId) return r;
-        const newHistoryEntry = {
-          version: (r.revisionHistory?.length || 0) + 1,
-          status,
-          comments: notes,
-          reviewedBy: reviewerName,
-          timestamp: nowIso,
-        };
-        return {
-          ...r,
-          dplNotes: notes,
-          status,
-          reviewedBy: reviewerName,
-          reviewTimestamp: nowIso,
-          revisionHistory: [...(r.revisionHistory || []), newHistoryEntry],
-        };
-      })
-    );
-
-    const targetReport = reports.find((r) => r.id === reportId);
-    const updatedHistory = [
-      ...(targetReport?.revisionHistory || []),
-      {
-        version: (targetReport?.revisionHistory?.length || 0) + 1,
-        status,
-        comments: notes,
-        reviewedBy: reviewerName,
-        timestamp: nowIso,
+    const { data, error } = await supabase.functions.invoke('dpl-report-review', {
+      body: {
+        report_id: reportId,
+        decision,
+        feedback: notes,
       },
-    ];
-
-    await syncToSupabase('reports', {
-      id: reportId,
-      dplNotes: notes,
-      status,
-      reviewedBy: reviewerName,
-      reviewTimestamp: nowIso,
-      revisionHistory: updatedHistory,
     });
 
-    // Also persist review entry to report_reviews table if available
-    if (isSupabaseConfigured) {
-      try {
-        await supabase.from('report_reviews').insert({
-          report_id: reportId,
-          decision,
-          feedback: notes,
-          reviewed_by: reviewerName,
-          reviewed_at: nowIso,
-        });
-      } catch {
-        // Table or RLS guard
-      }
+    if (error || !data?.success) {
+      throw new Error(data?.error || error?.message || 'Penilaian DPL gagal disimpan ke Supabase.');
     }
+
+    const updatedReports = await listWorkspaceRecords<ReportRecord>('reports');
+    setReports(updatedReports);
   };
 
   const handleUpdateMember = async (updatedMember: Member) => {
@@ -1193,38 +1133,44 @@ function AppContent() {
     await deleteFromSupabase('documentation', photoId);
   };
 
-  const handleToggleMilestone = (
+  const handleToggleMilestone = async (
     programId: string,
     milestoneIndex: number
   ) => {
-    setPrograms((prev) =>
-      prev.map((p) => {
-        if (p.id !== programId) return p;
-        const newMilestones = p.keyMilestones.map((m, idx) =>
-          idx === milestoneIndex ? { ...m, completed: !m.completed } : m
-        );
-        const completedCount = newMilestones.filter((m) => m.completed).length;
-        const newPercent = Math.round(
-          (completedCount / (newMilestones.length || 1)) * 100
-        );
-        return {
-          ...p,
-          keyMilestones: newMilestones,
-          progressPercent: newPercent,
-          status: newPercent === 100 ? 'completed' : 'in_progress',
-        };
-      })
+    const current = programs.find((program) => program.id === programId);
+    if (!current) return;
+
+    const newMilestones = current.keyMilestones.map((milestone, index) =>
+      index === milestoneIndex
+        ? { ...milestone, completed: !milestone.completed }
+        : milestone
     );
+    const completedCount = newMilestones.filter((milestone) => milestone.completed).length;
+    const newPercent = Math.round((completedCount / (newMilestones.length || 1)) * 100);
+    const updatedProgram: WorkProgram = {
+      ...current,
+      keyMilestones: newMilestones,
+      progressPercent: newPercent,
+      status: newPercent === 100 ? 'completed' : 'in_progress',
+    };
+
+    await syncToSupabase('programs', updatedProgram);
+    setPrograms((prev) => prev.map((program) =>
+      program.id === programId ? updatedProgram : program
+    ));
   };
 
-  const handleTogglePublicVisibility = (programId: string) => {
-    setPrograms((prev) =>
-      prev.map((p) =>
-        p.id === programId
-          ? { ...p, isFeaturedInPublic: !p.isFeaturedInPublic }
-          : p
-      )
-    );
+  const handleTogglePublicVisibility = async (programId: string) => {
+    const current = programs.find((program) => program.id === programId);
+    if (!current) return;
+    const updatedProgram = {
+      ...current,
+      isFeaturedInPublic: !current.isFeaturedInPublic,
+    };
+    await syncToSupabase('programs', updatedProgram);
+    setPrograms((prev) => prev.map((program) =>
+      program.id === programId ? updatedProgram : program
+    ));
   };
 
   const handleAddTransaction = async (tx: TransactionRecord) => {
@@ -1335,41 +1281,56 @@ function AppContent() {
   };
 
   const handleResetData = async () => {
+    if (!isSuperAdmin) {
+      throw new Error('Hanya Super Admin yang dapat menghapus seluruh data workspace.');
+    }
     const ok = await appConfirm({
-      title: 'Kembalikan Seluruh Data ke Kondisi Awal?',
+      title: 'Hapus Seluruh Data Operasional Workspace?',
       description:
-        'Tindakan ini akan mengembalikan seluruh konfigurasi dan modul lokal ke data awal 10 anggota resmi KKN.',
-      targetName: 'Basis Data Lokal KKN SPACE',
+        'Tindakan ini menghapus data program, tugas, rapat, survei, dokumen, transaksi, laporan, dan pengumuman dari Supabase. Profil anggota, akun, histori registrasi, serta log keamanan tidak dihapus.',
+      targetName: 'Data Operasional KKN SPACE di Supabase',
       consequences: [
-        'Perubahan lokal yang belum tersinkronisasi akan diatur ulang ke data standar.',
+        'Seluruh record operasional pada modul workspace akan dihapus permanen.',
+        'Profil anggota dan akun login tetap dipertahankan.',
       ],
       level: 'irreversible',
-      confirmLabel: 'Reset Data Sekarang',
+      confirmLabel: 'Hapus Data Operasional',
       requireTypeConfirmation: 'RESET',
     });
     if (!ok) return;
 
-    setUnitConfig(INITIAL_UNIT_CONFIG);
-    setMembers(INITIAL_MEMBERS);
-    setPrograms(INITIAL_PROGRAMS);
-    setTasks(INITIAL_TASKS);
-    setMeetings(INITIAL_MEETINGS);
-    setTransactions(INITIAL_TRANSACTIONS);
-    setVillageResearch(INITIAL_VILLAGE_RESEARCH);
-    setSurveys(INITIAL_SURVEYS);
-    setInventory(INITIAL_INVENTORY);
-    setDocumentation(INITIAL_DOCUMENTATION);
-    setDocumentationAlbums(INITIAL_DOCUMENTATION_ALBUMS);
-    setReports(INITIAL_REPORTS);
-    setDecisions(INITIAL_DECISION_LOG);
-    setArchive(INITIAL_ARCHIVE);
-    setPublicArticles(INITIAL_PUBLIC_ARTICLES);
-    setStakeholders(INITIAL_STAKEHOLDERS);
-    setAnnouncements(INITIAL_ANNOUNCEMENTS);
+    const modules: WorkspaceModuleKey[] = [
+      'unit_config', 'programs', 'tasks', 'meetings', 'decisions',
+      'village_research', 'surveys', 'documentation', 'documentation_albums',
+      'transactions', 'inventory', 'reports', 'archive', 'stakeholders',
+      'announcements', 'public_articles',
+    ];
+
+    for (const moduleKey of modules) {
+      const records = await listWorkspaceRecords<{ id: string } & Record<string, any>>(moduleKey);
+      for (const record of records) {
+        await deleteWorkspaceRecord(moduleKey, record.id);
+      }
+    }
+
+    setPrograms([]);
+    setTasks([]);
+    setMeetings([]);
+    setTransactions([]);
+    setSurveys([]);
+    setInventory([]);
+    setDocumentation([]);
+    setDocumentationAlbums([]);
+    setReports([]);
+    setDecisions([]);
+    setArchive([]);
+    setStakeholders([]);
+    setPublicArticles([]);
+    setAnnouncements([]);
     appNotify({
       type: 'success',
-      title: 'Data Berhasil Direset',
-      message: 'Seluruh modul telah dikembalikan ke kondisi awal.',
+      title: 'Data Operasional Dihapus',
+      message: 'Workspace telah dikosongkan di Supabase. Data anggota dan autentikasi tetap aman.',
     });
   };
 
