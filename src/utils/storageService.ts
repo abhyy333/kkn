@@ -114,62 +114,9 @@ export function validateFileBeforeUpload(
 }
 
 /**
- * Compresses an image file to a data URL for resilient preview and offline-capable fallback.
- */
-async function createCompressedDataUrl(file: File): Promise<string> {
-  if (file.type.startsWith('image/')) {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const img = new Image();
-        img.onload = () => {
-          const maxDim = 1100;
-          let width = img.width;
-          let height = img.height;
-          if (width > maxDim || height > maxDim) {
-            if (width > height) {
-              height = Math.round((height * maxDim) / width);
-              width = maxDim;
-            } else {
-              width = Math.round((width * maxDim) / height);
-              height = maxDim;
-            }
-          }
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, width, height);
-            resolve(canvas.toDataURL('image/jpeg', 0.8));
-          } else {
-            resolve(String(ev.target?.result || ''));
-          }
-        };
-        img.onerror = () => resolve(String(ev.target?.result || ''));
-        img.src = String(ev.target?.result || '');
-      };
-      reader.onerror = () => resolve(URL.createObjectURL(file));
-      reader.readAsDataURL(file);
-    });
-  }
-
-  if (file.size <= 650 * 1024) {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (ev) =>
-        resolve(String(ev.target?.result || URL.createObjectURL(file)));
-      reader.onerror = () => resolve(URL.createObjectURL(file));
-      reader.readAsDataURL(file);
-    });
-  }
-
-  return URL.createObjectURL(file);
-}
-
-/**
- * Uploads a file to Supabase Storage under `kkn-space/{folder}/{timestamp}_{sanitizedName}`
- * with automatic compressed data URL fallback if bucket is not yet provisioned.
+ * Uploads media to the private Supabase Storage bucket. Approved public media
+ * uses a public/ object prefix; all other material remains under private/.
+ * No browser data URL/object URL fallback is allowed for persistent uploads.
  */
 export async function uploadFileToStorage(
   file: File,
@@ -178,50 +125,46 @@ export async function uploadFileToStorage(
   uploaderName?: string,
   isPubliclyApproved: boolean = false
 ): Promise<UploadedFileMetadata> {
-  const timestamp = Date.now();
-  const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const fileId = `media-${timestamp}-${Math.random().toString(36).slice(2, 7)}`;
-  const storagePath = `kkn-space/${folder}/${timestamp}_${sanitizedName}`;
-  const uploadedBy = uploaderName || 'Anggota KKN Pringgasela Selatan';
-
-  onProgress?.(15);
-
-  let downloadUrl = '';
-
-  if (isSupabaseConfigured) {
-    try {
-      onProgress?.(45);
-      const { error: uploadErr } = await supabase.storage
-        .from(STORAGE_BUCKET)
-        .upload(storagePath, file, {
-          contentType: file.type || 'application/octet-stream',
-          upsert: true,
-        });
-
-      if (!uploadErr) {
-        const { data: publicUrlData } = supabase.storage
-          .from(STORAGE_BUCKET)
-          .getPublicUrl(storagePath);
-        if (publicUrlData?.publicUrl) {
-          downloadUrl = publicUrlData.publicUrl;
-          onProgress?.(90);
-        }
-      }
-    } catch {
-      // Fallback to compressed data URL below
-    }
+  if (!isSupabaseConfigured) {
+    throw new Error('Supabase belum terkonfigurasi. File tidak dapat disimpan.');
   }
 
-  if (!downloadUrl) {
-    onProgress?.(65);
-    downloadUrl = await createCompressedDataUrl(file);
-    onProgress?.(92);
+  const timestamp = Date.now();
+  const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const fileId = `media-${timestamp}-${crypto.randomUUID().slice(0, 8)}`;
+  const visibilityPrefix = isPubliclyApproved ? 'public' : 'private';
+  const storagePath = `${visibilityPrefix}/${folder}/${timestamp}_${sanitizedName}`;
+  const uploadedBy = uploaderName || 'Anggota KKN Pringgasela Selatan';
+
+  onProgress?.(10);
+  const { error: uploadError } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .upload(storagePath, file, {
+      contentType: file.type || 'application/octet-stream',
+      upsert: false,
+    });
+
+  if (uploadError) {
+    throw new Error(`Upload ke Supabase Storage gagal: ${uploadError.message}`);
+  }
+
+  onProgress?.(75);
+  const { data: signedData, error: signedUrlError } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .createSignedUrl(storagePath, 60 * 60);
+
+  if (signedUrlError || !signedData?.signedUrl) {
+    // Remove the just-uploaded object so an orphan is not left behind.
+    await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
+    throw new Error(
+      signedUrlError?.message || 'File tersimpan tetapi URL aksesnya gagal dibuat.'
+    );
   }
 
   const metadata: UploadedFileMetadata = {
     id: fileId,
     name: file.name,
-    url: downloadUrl,
+    url: signedData.signedUrl,
     storagePath,
     folder,
     size: file.size,
@@ -232,29 +175,6 @@ export async function uploadFileToStorage(
     isPubliclyApproved,
   };
 
-  if (isSupabaseConfigured && metadata.url.length < 850000) {
-    try {
-      await supabase.from('media_files').upsert(
-        {
-          id: fileId,
-          name: metadata.name,
-          url: metadata.url,
-          storage_path: metadata.storagePath,
-          folder: metadata.folder,
-          size: metadata.size,
-          size_formatted: metadata.sizeFormatted,
-          content_type: metadata.contentType,
-          uploaded_at: metadata.uploadedAt,
-          uploaded_by: metadata.uploadedBy,
-          is_publicly_approved: metadata.isPubliclyApproved,
-        },
-        { onConflict: 'id' }
-      );
-    } catch {
-      // Optional table
-    }
-  }
-
   onProgress?.(100);
   return metadata;
 }
@@ -264,24 +184,19 @@ export async function uploadFileToStorage(
  */
 export async function deleteFileFromStorage(
   storagePath?: string,
-  fileId?: string
+  _fileId?: string
 ): Promise<void> {
-  if (!isSupabaseConfigured) return;
-
-  if (storagePath && storagePath.startsWith('kkn-space/')) {
-    try {
-      await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
-    } catch {
-      // Non-blocking
-    }
+  if (!isSupabaseConfigured) {
+    throw new Error('Supabase belum terkonfigurasi. File tidak dapat dihapus.');
   }
+  if (!storagePath) return;
 
-  if (fileId) {
-    try {
-      await supabase.from('media_files').delete().eq('id', fileId);
-    } catch {
-      // Non-blocking
-    }
+  const { error } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .remove([storagePath]);
+
+  if (error) {
+    throw new Error(`Gagal menghapus file dari Supabase Storage: ${error.message}`);
   }
 }
 
