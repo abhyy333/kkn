@@ -1,158 +1,122 @@
 // @ts-nocheck
-// =============================================================================
-// SUPABASE EDGE FUNCTION: get-project-dpl-status (v1.0.0)
-// Project: scslevzuxxkfcuvwbtty
-// Description:
-//   Authoritative server-side endpoint for DPL status and identity synchronization:
-//   - Returns official DPL supervisor profile and active status.
-//   - Returns raw registered email ONLY to authorized Super Admin in `admin_private`.
-//   - Returns masked email or status indicators to ordinary workspace members.
-// Security:
-//   - Strict CORS origin allowlist
-//   - OPTIONS returns HTTP 200
-// =============================================================================
+// Returns the official supervisor card/status from the current KKN schema.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { handleCorsPreflight, getCorsHeaders, isAllowedOrigin } from '../_shared/cors.ts';
 
-const OFFICIAL_DPL_MEMBER_ID = 'c7bf53d4-1c27-424e-992a-7c7c0f98707a';
-const OFFICIAL_DPL_EMAIL = 'ellymaelani@gmail.com';
-const SUPER_ADMIN_PRIMARY_EMAIL = 'abhyy333@gmail.com';
+const PROJECT_ID = 'f5dcc382-8cc9-465a-b919-e58d6a688eea';
+const DPL_MEMBER_ID = 'c7bf53d4-1c27-424e-992a-7c7c0f98707a';
+
+function reply(body: Record<string, unknown>, status: number, cors: Record<string,string>) {
+  return new Response(JSON.stringify(body), { status, headers: { ...cors, 'Cache-Control': 'no-store' } });
+}
 
 Deno.serve(async (req: Request) => {
-  const origin = req.headers.get('Origin') || req.headers.get('origin');
-
-  if (req.method === 'OPTIONS') {
-    return handleCorsPreflight(req);
-  }
-
-  if (origin && !isAllowedOrigin(origin)) {
-    return new Response(
-      JSON.stringify({ error: `Forbidden: Origin '${origin}' is not allowed by CORS policy.` }),
-      { status: 403, headers: { 'Content-Type': 'application/json', 'Vary': 'Origin' } }
-    );
-  }
-
-  const corsHeaders = getCorsHeaders(origin);
+  const origin = req.headers.get('origin');
+  if (req.method === 'OPTIONS') return handleCorsPreflight(req);
+  const cors = getCorsHeaders(origin);
+  if (req.method !== 'POST') return reply({ error: 'Method not allowed' }, 405, cors);
+  if (origin && !isAllowedOrigin(origin)) return reply({ error: 'Origin not allowed' }, 403, cors);
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-    const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+    const url = Deno.env.get('SUPABASE_URL') ?? '';
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+    if (!url || !serviceKey || !anonKey) return reply({ error: 'Server configuration missing' }, 500, cors);
 
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
-      return new Response(
-        JSON.stringify({ error: 'Server configuration missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    const authorization = req.headers.get('Authorization');
+    if (!authorization?.startsWith('Bearer ')) return reply({ error: 'Authentication required' }, 401, cors);
+
+    const userClient = createClient(url, anonKey, { global: { headers: { Authorization: authorization } }, auth: { persistSession:false } });
+    const { data: authData, error: authError } = await userClient.auth.getUser();
+    const caller = authData?.user;
+    if (authError || !caller?.id || !caller.email || !caller.email_confirmed_at) return reply({ error: 'Sesi tidak valid atau email belum terverifikasi.' }, 401, cors);
+
+    const admin = createClient(url, serviceKey, { auth: { persistSession:false, autoRefreshToken:false } });
+    const { data: adminAccount, error: adminError } = await admin.from('admin_accounts')
+      .select('role,is_active').eq('user_id',caller.id).maybeSingle();
+    if (adminError) return reply({ error: 'Gagal memverifikasi hak akses.' }, 500, cors);
+    const isSuperAdmin = adminAccount?.role === 'super_admin' && adminAccount?.is_active === true;
+
+    if (!isSuperAdmin) {
+      const { data: membership, error: membershipError } = await admin.from('member_access')
+        .select('id').eq('project_id',PROJECT_ID).eq('user_id',caller.id).eq('is_active',true).maybeSingle();
+      if (membershipError) return reply({ error: 'Gagal memverifikasi keanggotaan proyek.' }, 500, cors);
+      if (!membership) return reply({ error: 'Akun ini tidak memiliki akses ke proyek KKN.' }, 403, cors);
     }
 
-    const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
+    const { data: member, error: memberError } = await admin.from('members')
+      .select('id,project_id,full_name,position_title,division,study_program,faculty,institutional_id,member_category,status,auth_user_id')
+      .eq('id',DPL_MEMBER_ID).eq('project_id',PROJECT_ID).eq('member_category','supervisor').maybeSingle();
+    if (memberError) return reply({ error: 'Gagal membaca profil DPL.' }, 500, cors);
+    if (!member) return reply({ error: 'Profil DPL tidak ditemukan.' }, 404, cors);
 
-    // Check optional caller session
-    let isSuperAdmin = false;
-    const authHeader = req.headers.get('Authorization');
-    if (authHeader) {
-      try {
-        const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-          global: { headers: { Authorization: authHeader } },
-        });
-        const { data: userData } = await userClient.auth.getUser();
-        if (userData?.user?.email) {
-          const callerEmail = userData.user.email.trim().toLowerCase();
-          if (callerEmail === SUPER_ADMIN_PRIMARY_EMAIL) {
-            isSuperAdmin = true;
-          } else {
-            const { data: adminRow } = await adminClient
-              .from('admin_accounts')
-              .select('role, is_active')
-              .or(`auth_user_id.eq.${userData.user.id},user_id.eq.${userData.user.id},email.ilike.${callerEmail}`)
-              .maybeSingle();
-            if (adminRow && adminRow.is_active !== false && adminRow.role === 'super_admin') {
-              isSuperAdmin = true;
-            }
-          }
-        }
-      } catch {}
+    const { data: registration, error: registrationError } = await admin.from('registered_emails')
+      .select('email,is_enabled,activated_at,created_at').eq('project_id',PROJECT_ID).eq('member_id',DPL_MEMBER_ID).maybeSingle();
+    if (registrationError) return reply({ error: 'Gagal membaca status registrasi DPL.' }, 500, cors);
+
+    let authConfirmed = false;
+    let linkedEmailMatches = false;
+    if (member.auth_user_id) {
+      const { data: authUserData, error: authUserError } = await admin.auth.admin.getUserById(member.auth_user_id);
+      if (authUserError || !authUserData?.user) return reply({ error: 'Tautan akun Auth DPL tidak dapat diverifikasi.' }, 409, cors);
+      authConfirmed = Boolean(authUserData.user.email_confirmed_at);
+      linkedEmailMatches = Boolean(registration?.email && authUserData.user.email?.toLowerCase() === registration.email.toLowerCase());
     }
 
-    // Fetch official DPL from database or fallback to official constants
-    let supervisor = {
-      id: OFFICIAL_DPL_MEMBER_ID,
-      name: 'Lalu Muhammad Aby Dujana, M.Si.',
-      nip: '198910222024061001',
-      title: 'Dosen Pembimbing Lapangan',
-      position: 'Dosen Pembimbing Lapangan',
-      faculty: 'S1 Ilmu Lingkungan',
-      study_program: 'S1 Ilmu Lingkungan',
-      division: 'DPL / Supervisi',
-      category: 'supervisor',
-    };
+    const { data: dplAccess, error: accessError } = member.auth_user_id
+      ? await admin.from('member_access').select('user_id,role,is_active')
+          .eq('project_id',PROJECT_ID).eq('member_id',DPL_MEMBER_ID).maybeSingle()
+      : { data:null, error:null };
+    if (accessError) return reply({ error: 'Gagal membaca role akses DPL.' }, 500, cors);
 
-    const { data: memRow } = await adminClient
-      .from('members')
-      .select('*')
-      .eq('id', OFFICIAL_DPL_MEMBER_ID)
-      .maybeSingle();
+    const emailRegistered = Boolean(registration?.email && registration.is_enabled);
+    const roleIsDpl = Boolean(dplAccess?.is_active && dplAccess.role === 'dpl' && dplAccess.user_id === member.auth_user_id);
+    const isActive = Boolean(emailRegistered && member.auth_user_id && authConfirmed && linkedEmailMatches && member.status === 'active' && roleIsDpl);
 
-    if (memRow) {
-      supervisor = {
-        id: memRow.id,
-        name: memRow.name || supervisor.name,
-        nip: memRow.nip || supervisor.nip,
-        title: memRow.title || memRow.position || supervisor.title,
-        position: memRow.position || supervisor.position,
-        faculty: memRow.faculty || memRow.program_study || supervisor.faculty,
-        study_program: memRow.program_study || memRow.faculty || supervisor.study_program,
-        division: memRow.division || supervisor.division,
-        category: memRow.member_category || 'supervisor',
-      };
-    }
+    const activationStatus = !emailRegistered
+      ? 'not_registered'
+      : isActive
+        ? 'activated'
+        : member.auth_user_id && !authConfirmed
+          ? 'confirmation_pending'
+          : member.auth_user_id && (!linkedEmailMatches || !roleIsDpl)
+            ? 'account_reconciliation_required'
+            : 'pending_activation';
 
-    // Fetch registered email record
-    const { data: regRow } = await adminClient
-      .from('registered_emails')
-      .select('*')
-      .eq('member_id', OFFICIAL_DPL_MEMBER_ID)
-      .maybeSingle();
-
-    const dplEmail = regRow?.email || OFFICIAL_DPL_EMAIL;
-    const activationStatus = regRow?.status || 'activated';
-    const isActive = regRow?.is_active !== false && activationStatus !== 'disabled';
-
-    // Masked email for non-super_admin
-    const maskedEmail = dplEmail.replace(/^(.{2})(.*)(@.*)$/, (_, a, b, c) => `${a}${'*'.repeat(Math.max(3, b.length))}${c}`);
-
-    const responsePayload: any = {
-      success: true,
-      supervisor,
-      account: {
-        email_registered: true,
-        email: isSuperAdmin ? dplEmail : maskedEmail,
-        activation_status: 'activated', // Verified database state is active
-        is_active: true,
-        role: 'dpl',
+    const payload: Record<string, unknown> = {
+      success:true,
+      supervisor:{
+        id:member.id,
+        name:member.full_name,
+        nip:member.institutional_id,
+        title:member.position_title,
+        position:member.position_title,
+        faculty:member.faculty,
+        study_program:member.study_program,
+        division:member.division,
+        category:member.member_category,
+      },
+      account:{
+        email_registered:emailRegistered,
+        activation_status:activationStatus,
+        is_active:isActive,
+        role:roleIsDpl?'dpl':null,
       },
     };
 
     if (isSuperAdmin) {
-      responsePayload.admin_private = {
-        email: dplEmail,
-        registered_at: regRow?.registered_at || '2026-07-01T00:00:00.000Z',
-        auth_user_id: regRow?.auth_user_id || regRow?.activated_uid || null,
+      payload.admin_private = {
+        email:emailRegistered ? registration.email : null,
+        registered_at:registration?.created_at ?? null,
+        activated_at:registration?.activated_at ?? null,
+        auth_user_id:member.auth_user_id,
       };
     }
 
-    return new Response(
-      JSON.stringify(responsePayload),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  } catch (err: any) {
-    return new Response(
-      JSON.stringify({ error: err?.message || 'Gagal memuat status DPL' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return reply(payload,200,cors);
+  } catch (error) {
+    console.error('get-project-dpl-status error',error instanceof Error?error.message:'unknown');
+    return reply({ error:'Gagal memuat status DPL dari database.' },500,cors);
   }
 });
