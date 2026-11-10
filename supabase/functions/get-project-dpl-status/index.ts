@@ -175,7 +175,8 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    const emailRegistered = Boolean(registration?.email && registration.is_enabled);
+    const hasRegistration = Boolean(registration?.email);
+    const emailRegistered = Boolean(hasRegistration && registration?.is_enabled);
     const roleIsDpl = Boolean(dplAccess?.role === "dpl" && dplAccess.is_active && dplAccess.user_id === supervisor.auth_user_id);
     const isActive = Boolean(
       emailRegistered &&
@@ -186,13 +187,13 @@ Deno.serve(async (req: Request) => {
       roleIsDpl
     );
 
-    const accountStatus = !emailRegistered
+    const accountStatus = !hasRegistration
       ? "not_registered"
-      : isActive
-        ? "active"
-        : registration?.is_enabled
-          ? "pending_activation"
-          : "disabled";
+      : !registration?.is_enabled
+        ? "disabled"
+        : isActive
+          ? "active"
+          : "pending_activation";
 
     return json({
       success: true,
