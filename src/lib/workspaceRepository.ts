@@ -62,7 +62,7 @@ export async function listWorkspaceRecords<T extends WorkspaceRecord>(
     );
 
     const storagePath = typeof refreshed.storagePath === 'string'
-      ? refreshed.storagePath.replace(/^kkn-space\\//, '')
+      ? refreshed.storagePath.replace(/^kkn-space\//, '')
       : null;
     if (storagePath) {
       const { data: signed, error: signError } = await supabase.storage
@@ -203,12 +203,14 @@ export async function migrateLegacyLocalStorageToSupabase(): Promise<{
 
   const allKeys = Array.from({ length: storage.length }, (_, index) => storage.key(index))
     .filter((key): key is string => Boolean(key && key.startsWith('kkn_space_')));
-  const knownKeys = new Set(LEGACY_MODULE_KEYS.map((item) => item.key));
   const knownSources = new Map(LEGACY_MODULE_KEYS.map((item) => [item.key, item]));
 
   let migratedRecords = 0;
   for (const key of allKeys) {
-    if (SENSITIVE_LEGACY_KEYS.has(key)) continue;
+    if (
+      SENSITIVE_LEGACY_KEYS.has(key) ||
+      /(?:registered_emails|authoritative_profile|supabase_auth)/i.test(key)
+    ) continue;
 
     const raw = storage.getItem(key);
     if (raw === null) continue;
