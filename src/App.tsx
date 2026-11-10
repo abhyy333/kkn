@@ -17,6 +17,7 @@ import {
   INITIAL_STAKEHOLDERS,
   INITIAL_ANNOUNCEMENTS,
   INITIAL_DOCUMENTATION_ALBUMS,
+  OFFICIAL_PROJECT_ID,
 } from './data/mockData';
 
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -377,11 +378,8 @@ function AppContent() {
                   faculty: m.faculty || existing.faculty,
                   phone: m.phone || existing.phone,
                   bio: m.bio || existing.bio,
-                  email: validEmail,
-                  registeredEmail: validEmail || undefined,
                   avatar: m.avatar || existing.avatar,
                   avatarStoragePath: m.avatarStoragePath || existing.avatarStoragePath,
-                  accountStatus: m.accountStatus || existing.accountStatus,
                   responsibilities: Array.isArray(m.responsibilities)
                     ? m.responsibilities
                     : existing.responsibilities,
@@ -399,7 +397,6 @@ function AppContent() {
         if (!rawM || typeof rawM !== 'object' || isFabricatedLegacyRecord(rawM)) return;
         const candidateId = rawM.member_id || rawM.memberId || rawM.id;
         const candidateName = (rawM.name || rawM.full_name || rawM.display_name || '').trim();
-        const candidateEmail = (rawM.email || '').trim().toLowerCase();
 
         let targetId: string | undefined =
           candidateId && memberMap.has(candidateId) ? candidateId : undefined;
@@ -413,39 +410,22 @@ function AppContent() {
           }
         }
 
-        if (!targetId && candidateEmail) {
-          for (const [id, existing] of memberMap.entries()) {
-            if (existing.email && existing.email.toLowerCase() === candidateEmail) {
-              targetId = id;
-              break;
-            }
-          }
-        }
-
         if (targetId && memberMap.has(targetId)) {
           const existing = memberMap.get(targetId)!;
-          const cleanEmail =
-            candidateEmail && !isFabricatedLegacyRecord({ email: candidateEmail })
-              ? candidateEmail
-              : existing.email;
           memberMap.set(targetId, {
             ...existing,
+            databaseId: String(rawM.id || candidateId || existing.databaseId || ''),
             name: candidateName || existing.name,
-            role: rawM.role && rawM.role !== 'member' ? rawM.role : rawM.position || existing.role,
-            position: rawM.position || existing.position,
+            role: rawM.position_title || rawM.position || existing.role,
+            position: rawM.position_title || rawM.position || existing.position,
             division: rawM.division || existing.division,
             faculty: rawM.faculty || existing.faculty,
-            major: rawM.major || existing.major,
-            nim: rawM.nim || existing.nim,
-            phone: rawM.phone || existing.phone,
-            bio: rawM.bio || existing.bio,
-            email: cleanEmail,
-            registeredEmail: cleanEmail || undefined,
-            avatar: rawM.avatar || rawM.avatar_url || existing.avatar,
-            avatarStoragePath: rawM.avatar_storage_path || rawM.avatarStoragePath || existing.avatarStoragePath,
-            accountStatus:
-              rawM.account_status || rawM.accountStatus || existing.accountStatus,
-            authUid: rawM.auth_uid || rawM.authUid || rawM.auth_user_id || rawM.user_id || existing.authUid,
+            major: rawM.study_program || rawM.major || existing.major,
+            nim: rawM.student_number || rawM.nim || existing.nim,
+            phone: rawM.phone_private || rawM.phone || existing.phone,
+            bio: rawM.profile_bio || rawM.bio || existing.bio,
+            avatarStoragePath: rawM.avatar_path || rawM.avatar_storage_path || rawM.avatarStoragePath || existing.avatarStoragePath,
+            authUid: rawM.auth_user_id || existing.authUid,
             responsibilities: Array.isArray(rawM.responsibilities)
               ? rawM.responsibilities
               : existing.responsibilities,
@@ -453,46 +433,27 @@ function AppContent() {
         }
       });
 
-      // 4. Authoritative Registered Emails overlay from Supabase + local verified registry
-      let localRegs: any[] = [];
-      try {
-        const rawReg = localStorage.getItem('kkn_space_registered_emails_v1');
-        if (rawReg) {
-          const parsedReg = JSON.parse(rawReg);
-          if (Array.isArray(parsedReg)) {
-            localRegs = parsedReg.filter((r) => !isFabricatedLegacyRecord(r));
-          }
-        }
-      } catch {}
-
-      const allVerifiedRegs = [...localRegs, ...sbRegisteredEmails.filter((r) => !isFabricatedLegacyRecord(r))];
-      allVerifiedRegs.forEach((reg) => {
+      // 4. Authoritative login-email registry overlay. Never read this from localStorage.
+      sbRegisteredEmails.forEach((reg) => {
         if (!reg || typeof reg !== 'object') return;
         const regEmail = String(reg.email || '').trim().toLowerCase();
-        if (!regEmail) return;
-        const regMemberId = String(reg.member_id || reg.memberId || '').trim();
-        if (!regMemberId || !memberMap.has(regMemberId)) return;
+        const regMemberId = String(reg.member_id || '').trim();
+        if (!regEmail || !regMemberId) return;
 
-        const isDisabled = reg.status === 'disabled' || reg.is_active === false;
-        const isActivated =
-          !isDisabled &&
-          (reg.status === 'activated' ||
-            reg.status === 'active' ||
-            Boolean(reg.activated_uid || reg.activatedUid || reg.auth_user_id));
+        const target = Array.from(memberMap.entries()).find(
+          ([legacyId, item]) => item.databaseId === regMemberId || legacyId === regMemberId
+        );
+        if (!target) return;
 
-        const m = memberMap.get(regMemberId)!;
-        memberMap.set(regMemberId, {
-          ...m,
-          email: regEmail,
-          registeredEmail: regEmail,
-          accountStatus: isDisabled
-            ? 'disabled'
-            : isActivated
-            ? 'active'
-            : 'pending',
-          authUid: reg.activated_uid || reg.activatedUid || reg.auth_user_id || m.authUid,
-          acceptedAt: reg.activated_at || reg.activatedAt || m.acceptedAt,
-          disabledAt: reg.disabled_at || reg.disabledAt || m.disabledAt,
+        const [legacyId, member] = target;
+        const isDisabled = reg.is_enabled === false;
+        const isActivated = !isDisabled && Boolean(reg.activated_at && member.authUid);
+        memberMap.set(legacyId, {
+          ...member,
+          email: isDisabled ? '' : regEmail,
+          registeredEmail: isDisabled ? undefined : regEmail,
+          accountStatus: isDisabled ? 'disabled' : isActivated ? 'active' : 'pending',
+          acceptedAt: reg.activated_at || member.acceptedAt,
         });
       });
 
@@ -502,7 +463,7 @@ function AppContent() {
         for (const [id, m] of memberMap.entries()) {
           const isTargetHabir = userEmailLower === 'abhyy333@gmail.com' && id === 'm-4';
           const isOwnAuthUid = Boolean(user.uid && m.authUid && m.authUid === user.uid);
-          const isOwnProfileId = Boolean(profile?.memberId && profile.memberId === id && isOwnAuthUid);
+          const isOwnProfileId = Boolean(profile?.memberId && (profile.memberId === id || profile.memberId === m.databaseId) && isOwnAuthUid);
 
           if (isTargetHabir || isOwnAuthUid || isOwnProfileId) {
             memberMap.set(id, {
@@ -548,6 +509,7 @@ function AppContent() {
       supabase
         .from('members')
         .select('*')
+        .eq('project_id', OFFICIAL_PROJECT_ID)
         .then(
           ({ data }) => {
             if (Array.isArray(data) && data.length > 0) {
@@ -578,6 +540,7 @@ function AppContent() {
       supabase
         .from('members')
         .select('*')
+        .eq('project_id', OFFICIAL_PROJECT_ID)
         .eq('member_category', 'supervisor')
         .maybeSingle()
         .then(
@@ -598,7 +561,8 @@ function AppContent() {
       // 4. Authoritative verified registered_emails
       supabase
         .from('registered_emails')
-        .select('*')
+        .select('id,project_id,member_id,email,is_enabled,activated_at,created_at')
+        .eq('project_id', OFFICIAL_PROJECT_ID)
         .then(
           ({ data }) => {
             if (Array.isArray(data) && data.length > 0) {
