@@ -8,8 +8,22 @@ const ALLOWED_ORIGINS = new Set([
 const PROJECT_ID = "f5dcc382-8cc9-465a-b919-e58d6a688eea";
 const DPL_MEMBER_ID = "c7bf53d4-1c27-424e-992a-7c7c0f98707a";
 
+function isAllowedOrigin(origin: string | null): boolean {
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(origin)) return true;
+  return (
+    /^https:\/\/kkn(-[a-z0-9-]+)?\.vercel\.app$/.test(origin) ||
+    /^https:\/\/kkn(-[a-z0-9-]+)-abhyy333s-projects\.vercel\.app$/.test(origin) ||
+    /^https:\/\/kkn(-[a-z0-9-]+)-abhyy333\.vercel\.app$/.test(origin) ||
+    /^https:\/\/kkn-space(-[a-z0-9-]+)?\.vercel\.app$/.test(origin) ||
+    /^https:\/\/kkn-space(-[a-z0-9-]+)-abhyy333s-projects\.vercel\.app$/.test(origin) ||
+    /^https:\/\/kkn-space(-[a-z0-9-]+)-abhyy333\.vercel\.app$/.test(origin)
+  );
+}
+
 function cors(origin: string | null): Record<string, string> {
-  const allowedOrigin = origin && ALLOWED_ORIGINS.has(origin)
+  const allowedOrigin = origin && isAllowedOrigin(origin)
     ? origin
     : "https://kkn-beta.vercel.app";
 
@@ -45,12 +59,12 @@ Deno.serve(async (req: Request) => {
   const headers = cors(origin);
 
   if (req.method === "OPTIONS") {
-    if (origin && !ALLOWED_ORIGINS.has(origin)) return json({ error: "Origin not allowed" }, 403, headers);
+    if (origin && !isAllowedOrigin(origin)) return json({ error: "Origin not allowed" }, 403, headers);
     return new Response("ok", { status: 200, headers });
   }
 
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
-  if (origin && !ALLOWED_ORIGINS.has(origin)) return json({ error: "Origin not allowed" }, 403, headers);
+  if (origin && !isAllowedOrigin(origin)) return json({ error: "Origin not allowed" }, 403, headers);
 
   const authorization = req.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) {
