@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Member } from '../../types';
 import { useAuth } from '../../context/AuthContext';
-import { InvitationManagerModal } from '../admin/InvitationManagerModal';
 import { EditMemberModal } from './EditMemberModal';
 import { MemberDetailModal } from './MemberDetailModal';
 import { formatInternationalPhone, getWhatsAppUrl, maskPhoneNumber } from '../../utils/phone';
@@ -57,8 +56,7 @@ export const MembersView: React.FC<MembersViewProps> = ({
   onNavigateToAdmin,
   onNavigate,
 }) => {
-  const { user, profile, isAdmin, isSuperAdmin } = useAuth();
-  const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const { user, profile, isSuperAdmin } = useAuth();
   const [dplRegStatus, setDplRegStatus] = useState<{ email: string; status: string } | null>(null);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [selectedMemberForDetail, setSelectedMemberForDetail] = useState<Member | null>(null);
