@@ -56,11 +56,14 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
   const [selectedReport, setSelectedReport] = useState<ReportRecord | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const registeredDpl: RegisteredDplRecord = {
-    email: dplStatus?.admin_private?.email || dplStatus?.account?.email || 'ellymaelani@gmail.com',
-    status: dplStatus?.account?.is_active ? 'activated' : (dplStatus?.account?.activation_status || 'activated'),
-    registered_at: dplStatus?.admin_private?.registered_at || '2026-07-01T00:00:00.000Z',
-  };
+  const registeredDpl: RegisteredDplRecord | null =
+    dplStatus?.account?.email_registered
+      ? {
+          email: dplStatus.admin_private?.email || '',
+          status: dplStatus.account.activation_status,
+          registered_at: dplStatus.admin_private?.registered_at || undefined,
+        }
+      : null;
 
   // Fetch actual DPL review logs from Supabase
   const loadDplSupervisionData = useCallback(async () => {
@@ -157,16 +160,32 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
           </div>
 
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 shrink-0">
-            {registeredDpl ? (
+            {isLoading ? (
+              <div className="p-3 rounded-lg bg-stone-50 border border-stone-200 text-xs min-w-[200px] text-stone-500">
+                Memuat status akun DPL...
+              </div>
+            ) : error ? (
+              <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-xs min-w-[200px]">
+                Status DPL gagal dimuat: {error}
+              </div>
+            ) : registeredDpl ? (
               <div className="p-3 rounded-lg bg-stone-50 border border-stone-200 text-xs space-y-0.5 min-w-[200px]">
                 <span className="text-stone-400 text-[10px] block">Email Login DPL:</span>
                 <span className="font-mono font-bold text-stone-900 block truncate">
-                  {registeredDpl.email}
+                  {registeredDpl.email || 'Email terdaftar'}
                 </span>
                 <div className="pt-1 flex items-center gap-1 text-[11px]">
-                  {registeredDpl.status === 'activated' || registeredDpl.status === 'active' ? (
+                  {registeredDpl.status === 'activated' ? (
                     <span className="text-emerald-700 font-semibold flex items-center gap-1">
                       <CheckCircle2 className="w-3.5 h-3.5" /> Akun Aktif
+                    </span>
+                  ) : registeredDpl.status === 'confirmation_pending' ? (
+                    <span className="text-amber-800 font-semibold flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-amber-600" /> Menunggu Konfirmasi Email
+                    </span>
+                  ) : registeredDpl.status === 'account_reconciliation_required' ? (
+                    <span className="text-red-700 font-semibold flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5" /> Perlu Rekonsiliasi
                     </span>
                   ) : (
                     <span className="text-amber-800 font-semibold flex items-center gap-1">
