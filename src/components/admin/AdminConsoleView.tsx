@@ -1027,6 +1027,9 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
 
     try {
       const cleanEmail = regEmail.trim().toLowerCase();
+      if (!selectedMemberId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(selectedMemberId)) {
+        throw new Error('Data anggota resmi belum selesai dimuat. Pilih ulang anggota setelah daftar Supabase muncul.');
+      }
       if (!cleanEmail || !cleanEmail.includes('@')) {
         pushToast('error', 'Format Email Tidak Valid', 'Masukkan alamat email yang valid.');
         setIsSubmittingReg(false);
@@ -3702,11 +3705,14 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                   className="w-full px-3 py-2 rounded-md border border-stone-200 bg-[#FAF9F5] text-xs focus:outline-none focus:border-[#4A6B53]"
                 >
                   <option value="">-- Pilih Anggota KKN --</option>
-                  {enrichedMembers.map((m) => (
-                    <option key={m.databaseId || m.id} value={m.databaseId || m.id}>
+                  {enrichedMembers.filter((m) => Boolean(m.databaseId)).map((m) => (
+                    <option key={m.databaseId} value={m.databaseId!}>
                       {m.name} — {m.position || m.role} ({m.email || 'Belum Didaftarkan'})
                     </option>
                   ))}
+                  {!enrichedMembers.some((m) => m.databaseId) && (
+                    <option value="" disabled>Memuat data anggota resmi dari Supabase...</option>
+                  )}
                   <option value="c7bf53d4-1c27-424e-992a-7c7c0f98707a">
                     {DPL_SUPERVISOR.name} — Dosen Pembimbing Lapangan ({registeredEmails.find((r) => r.memberId === 'c7bf53d4-1c27-424e-992a-7c7c0f98707a')?.email || 'Belum Didaftarkan'})
                   </option>
@@ -3848,7 +3854,25 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                               onClick={() => {
                                 const matchedMember = enrichedMembers.find(
                                   (m) => String(m.databaseId || m.id) === String(rec.memberId)
-                                );
+                                ) || (rec.memberId === 'c7bf53d4-1c27-424e-992a-7c7c0f98707a'
+                                  ? ({
+                                      id: rec.memberId,
+                                      databaseId: rec.memberId,
+                                      name: DPL_SUPERVISOR.name,
+                                      role: DPL_SUPERVISOR.position,
+                                      position: DPL_SUPERVISOR.position,
+                                      division: 'DPL / Supervisi',
+                                      email: rec.email,
+                                      registeredEmail: rec.email,
+                                      major: DPL_SUPERVISOR.faculty,
+                                      faculty: DPL_SUPERVISOR.faculty,
+                                      nim: '',
+                                      phone: '',
+                                      avatar: '',
+                                      responsibilities: [],
+                                      regRecord: rec,
+                                    } as Member & { regRecord?: RegisteredEmailRecord })
+                                  : undefined);
                                 if (matchedMember) handleOpenReplaceEmail(matchedMember);
                                 else pushToast('error', 'Profil Anggota Tidak Ditemukan', 'Muat ulang data anggota lalu coba lagi.');
                               }}
