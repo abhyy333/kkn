@@ -1573,115 +1573,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * the member's historical tasks, meetings, surveys, and other records.
    */
   const deleteMemberAccount = async (emailOrMemberId: string) => {
+    if (!isSupabaseConfigured || !user?.uid) {
+      throw new Error('Sesi Admin tidak valid. Silakan login ulang.');
+    }
+
     const key = emailOrMemberId.trim().toLowerCase();
     const targetRec = registeredEmails.find(
-      (r) =>
-        r.email.toLowerCase() === key ||
-        (r.memberId && r.memberId.toLowerCase() === key)
+      (r) => r.email.toLowerCase() === key || r.memberId === emailOrMemberId
     );
-
-    const targetEmail = (targetRec?.email || key).toLowerCase();
-    const targetUid = targetRec?.activatedUid;
-    const targetMemberId = targetRec?.memberId;
-
-    // Self-protection & last super_admin guard
+    if (!targetRec?.memberId) {
+      throw new Error('Registrasi email anggota tidak ditemukan pada database.');
+    }
     if (
-      targetEmail === SUPER_ADMIN_EMAIL ||
-      targetMemberId === 'm-4' ||
-      (user?.email && targetEmail === user.email.toLowerCase()) ||
-      (user?.uid && targetUid && targetUid === user.uid)
+      targetRec.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+      targetRec.systemRole === 'super_admin' ||
+      targetRec.activatedUid === user.uid
     ) {
-      throw new Error(
-        'Proteksi Keamanan: Akun Super Admin utama atau akun yang sedang login tidak dapat dihapus.'
-      );
+      throw new Error('Akun Super Admin utama atau akun yang sedang digunakan tidak dapat dihapus.');
     }
 
-    const activeSuperAdmins = registeredEmails.filter(
-      (r) => r.systemRole === 'super_admin'
-    );
-    if (
-      targetRec?.systemRole === 'super_admin' &&
-      activeSuperAdmins.length <= 1
-    ) {
-      throw new Error(
-        'Proteksi Keamanan: Tidak dapat menghapus satu-satunya Super Admin yang tersisa.'
-      );
-    }
+    const { data, error } = await supabase.functions.invoke('admin-reset-member-email', {
+      body: {
+        project_id: KKN_PROJECT_ID,
+        member_id: targetRec.memberId,
+        action: 'remove',
+        confirm_member_name: targetRec.name,
+        reason: 'Penghapusan registrasi email melalui Admin Console',
+      },
+    });
 
-    if (isSupabaseConfigured) {
+    if (error) {
+      let detail = error.message;
       try {
-        // 1. Delete Auth user via Supabase Edge Function (uses Supabase Admin API server-side)
-        await supabase.functions
-          .invoke('admin-manage-account', {
-            body: {
-              action: 'delete',
-              email: targetEmail,
-              uid: targetUid,
-              memberId: targetMemberId,
-            },
-          })
-          .catch(() => {});
-
-        // 2. Remove email registration & member_access rows
-        if (targetEmail.includes('@')) {
-          await supabase
-            .from('registered_emails')
-            .delete()
-            .ilike('email', targetEmail);
-
-          await supabase
-            .from('member_access')
-            .delete()
-            .ilike('email', targetEmail);
-        }
-
-        // 3. Unlink Auth account from member record while preserving the member and all historical records
-        if (targetMemberId) {
-          await supabase
-            .from('members')
-            .update({
-              email: '',
-              registered_email: '',
-              account_status: 'unregistered',
-              accountStatus: 'unregistered',
-              auth_uid: null,
-              authUid: null,
-            })
-            .eq('id', targetMemberId);
-        }
-      } catch (e) {
-        console.warn('Supabase deleteMemberAccount notice:', e);
-      }
+        const body = await (error as any).context?.json();
+        if (body?.error || body?.message) detail = body.error || body.message;
+      } catch {}
+      throw new Error(detail || 'Gagal menghapus email dan akun login anggota.');
     }
+    if (!data?.success) throw new Error(data?.error || 'Penghapusan email anggota gagal.');
 
-    try {
-      await fetch('/api/admin/account-action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'delete',
-          adminEmail: user?.email || SUPER_ADMIN_EMAIL,
-          email: targetEmail,
-          uid: targetUid,
-          memberId: targetMemberId,
-        }),
-      });
-    } catch {
-      // Non-fatal
-    }
-
-    const updatedList = registeredEmails.filter(
-      (r) =>
-        r.email.toLowerCase() !== targetEmail &&
-        (!targetMemberId || r.memberId !== targetMemberId)
-    );
-    setRegisteredEmails(updatedList);
-    saveLocalRegisteredEmails(updatedList);
-
+    await fetchRegisteredEmails();
     await logAdminActivity(
       'DELETE_AUTH_ACCOUNT',
-      `${targetRec?.name || targetEmail} (${targetEmail})`,
-      'Akun autentikasi & registrasi email dihapus permanen melalui Admin API. Seluruh riwayat tugas, rapat, dan survei anggota tetap dipertahankan.'
+      `${targetRec.name} (${targetRec.email})`,
+      'Email login dan akun Auth dihapus. Profil anggota serta riwayat kontribusi dipertahankan.'
     );
   };
 
