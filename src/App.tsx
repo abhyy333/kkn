@@ -24,7 +24,6 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ConfirmProvider, useConfirm } from './context/ConfirmContext';
 import { AuthModal } from './components/auth/AuthModal';
 import { ResetPasswordView } from './components/auth/ResetPasswordView';
-import { InvitationManagerModal } from './components/admin/InvitationManagerModal';
 
 import { Sidebar } from './components/layout/Sidebar';
 import { Topbar } from './components/layout/Topbar';
@@ -130,7 +129,6 @@ function AppContent() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
 
   // Core Data States
   const [unitConfig, setUnitConfig] = useState<UnitConfig>(INITIAL_UNIT_CONFIG);
@@ -1713,12 +1711,6 @@ function AppContent() {
             navigateTo('/workspace');
           }
         }}
-      />
-
-      {/* Admin Invitation Manager */}
-      <InvitationManagerModal
-        isOpen={isInviteModalOpen}
-        onClose={() => setIsInviteModalOpen(false)}
       />
 
       {/* 3 DISTINCT ENVIRONMENTS */}
