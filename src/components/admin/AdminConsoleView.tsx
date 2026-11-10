@@ -825,63 +825,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
     }
   };
 
-  // Handle Account Disable
-  const handlePromptDisableAccount = (m: Member & { regRecord?: RegisteredEmailRecord }) => {
-    if (isProtectedSuperAdmin(m)) {
-      pushToast(
-        'error',
-        'Aksi Ditolak',
-        'Akun Super Admin utama atau akun yang sedang login tidak dapat dinonaktifkan.'
-      );
-      return;
-    }
-
-    openConfirmDialog({
-      title: `Nonaktifkan Akun ${m.name}?`,
-      description: `Akses login Supabase Auth untuk ${m.name} (${m.email || 'Tanpa Email'}) akan dicabut sementara dan status akun pada registered_emails, member_access, serta members akan diubah menjadi Dinonaktifkan. Seluruh riwayat tugas dan rapat tetap aman.`,
-      confirmLabel: 'Ya, Nonaktifkan Akun',
-      variant: 'warning',
-      onConfirm: async () => {
-        await disableMemberAccount(
-          m.email || m.id,
-          'Dinonaktifkan oleh Super Admin melalui Admin Console'
-        );
-        await onUpdateMember({
-          ...m,
-          accountStatus: 'disabled',
-          disabledAt: new Date().toISOString(),
-        });
-        await loadData();
-        pushToast(
-          'warning',
-          'Akun Dinonaktifkan',
-          `Akses akun ${m.name} berhasil dinonaktifkan.`
-        );
-      },
-    });
-  };
-
-  // Handle Account Restore
-  const handleRestoreAccount = async (m: Member & { regRecord?: RegisteredEmailRecord }) => {
-    try {
-      await restoreMemberAccount(m.email || m.id);
-      const nextStatus = m.authUid ? 'active' : 'pending';
-      await onUpdateMember({
-        ...m,
-        accountStatus: nextStatus,
-        disabledAt: undefined,
-      });
-      await loadData();
-      pushToast(
-        'success',
-        'Akun Dipulihkan',
-        `Akun ${m.name} telah diaktifkan kembali (${nextStatus === 'active' ? 'Aktif' : 'Menunggu Aktivasi'}).`
-      );
-    } catch (err: any) {
-      pushToast('error', 'Gagal Memulihkan Akun', err?.message || 'Terjadi kesalahan.');
-    }
-  };
-
   // Handle Permanent Auth Account Deletion
   const handlePromptDeleteAuthAccount = (m: Member & { regRecord?: RegisteredEmailRecord }) => {
     if (isProtectedSuperAdmin(m)) {
