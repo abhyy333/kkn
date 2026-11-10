@@ -191,6 +191,8 @@ export interface NavSection {
 
 export interface Member {
   id: string;
+  /** Stable UUID from public.members; `id` remains the legacy UI roster key. */
+  databaseId?: string;
   name: string;
   role: string;
   position?: string;
