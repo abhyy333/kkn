@@ -279,14 +279,6 @@ export const MembersView: React.FC<MembersViewProps> = ({
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
               <span>Kelola Registrasi Email (Admin Console)</span>
             </button>
-          ) : isAdmin ? (
-            <button
-              onClick={() => setIsInviteOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#4A6B53] text-white text-xs font-medium hover:bg-[#3B5643] transition-colors shadow-2xs"
-            >
-              <UserPlus className="w-4 h-4" />
-              <span>Kelola Undangan</span>
-            </button>
           ) : null}
         </div>
       </div>
