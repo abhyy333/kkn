@@ -31,6 +31,35 @@ const effectiveAnonKey = isSupabaseConfigured
   ? rawSupabaseAnonKey
   : 'placeholder-anon-key';
 
+const AUTH_STORAGE_KEY = 'kkn_space_supabase_auth';
+const memoryAuthStorage = new Map<string, string>();
+
+function getAuthSessionStorage(): Storage | {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+  removeItem: (key: string) => void;
+} | undefined {
+  if (typeof window === 'undefined') return undefined;
+
+  try {
+    // One-time transfer of the existing session so users are not unexpectedly signed out.
+    const existingSession = window.sessionStorage.getItem(AUTH_STORAGE_KEY);
+    const legacySession = window.localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!existingSession && legacySession) {
+      window.sessionStorage.setItem(AUTH_STORAGE_KEY, legacySession);
+    }
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    return window.sessionStorage;
+  } catch {
+    // Do not fall back to persistent browser storage when sessionStorage is unavailable.
+    return {
+      getItem: (key: string) => memoryAuthStorage.get(key) ?? null,
+      setItem: (key: string, value: string) => { memoryAuthStorage.set(key, value); },
+      removeItem: (key: string) => { memoryAuthStorage.delete(key); },
+    };
+  }
+}
+
 export const supabase: SupabaseClient = createClient(
   effectiveUrl,
   effectiveAnonKey,
@@ -39,8 +68,8 @@ export const supabase: SupabaseClient = createClient(
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
-      storageKey: 'kkn_space_supabase_auth',
-      storage: typeof window !== 'undefined' ? window.localStorage : undefined,
+      storageKey: AUTH_STORAGE_KEY,
+      storage: getAuthSessionStorage(),
     },
   }
 );
