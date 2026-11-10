@@ -179,7 +179,21 @@ const SENSITIVE_LEGACY_KEYS = new Set([
  *
  * Browser source keys are removed only after all database writes succeed.
  */
-export async function migrateLegacyLocalStorageToSupabase(): Promise<{
+/**
+ * One-time migration for the primary browser and cleanup/archive for other browsers.
+ *
+ * The first Super Admin browser imports known legacy module data into active Supabase
+ * workspace records. After the global marker exists, each signed-in project member
+ * archives any remaining KKN-owned browser cache under a user-scoped legacy key.
+ * Browser keys are removed only after every required database write succeeds.
+ *
+ * Auth tokens and cached profile/registration state are never archived; Supabase Auth
+ * owns sessions and authoritative database tables own identity/authorization state.
+ */
+export async function migrateLegacyLocalStorageToSupabase(options: {
+  allowInitialImport?: boolean;
+  userId?: string;
+} = {}): Promise<{
   migratedRecords: number;
   removedKeys: number;
 }> {
@@ -187,6 +201,12 @@ export async function migrateLegacyLocalStorageToSupabase(): Promise<{
   if (typeof window === 'undefined') return { migratedRecords: 0, removedKeys: 0 };
 
   const storage = window.localStorage;
+  const userId = String(options.userId || '').trim();
+  const allKeys = Array.from({ length: storage.length }, (_, index) => storage.key(index))
+    .filter((key): key is string => Boolean(key && key.startsWith('kkn_space_')));
+
+  if (allKeys.length === 0) return { migratedRecords: 0, removedKeys: 0 };
+
   const { data: marker, error: markerError } = await supabase
     .from('kkn_workspace_records')
     .select('id')
@@ -198,13 +218,54 @@ export async function migrateLegacyLocalStorageToSupabase(): Promise<{
   if (markerError) {
     throw new Error(`Tidak dapat memeriksa status migrasi data lokal: ${markerError.message}`);
   }
-  if (marker) return { migratedRecords: 0, removedKeys: 0 };
-
-  const allKeys = Array.from({ length: storage.length }, (_, index) => storage.key(index))
-    .filter((key): key is string => Boolean(key && key.startsWith('kkn_space_')));
-  const knownSources = new Map(LEGACY_MODULE_KEYS.map((item) => [item.key, item]));
 
   let migratedRecords = 0;
+
+  if (marker) {
+    // The official dataset is already in Supabase. Preserve each other browser's
+    // remaining cache as a private, user-scoped archive instead of overwriting
+    // newer shared records with potentially stale browser copies.
+    if (!userId) {
+      throw new Error('ID pengguna tidak tersedia untuk mengarsipkan cache lokal.');
+    }
+
+    for (const key of allKeys) {
+      if (
+        SENSITIVE_LEGACY_KEYS.has(key) ||
+        /(?:registered_emails|authoritative_profile|supabase_auth)/i.test(key)
+      ) continue;
+
+      const raw = storage.getItem(key);
+      if (raw === null) continue;
+
+      let parsed: unknown = raw;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        // Keep legacy plain text verbatim in the restricted archive.
+      }
+
+      await upsertWorkspaceRecord('legacy_storage', {
+        id: `client:${userId}:${key}`,
+        storageKey: key,
+        archivedBy: userId,
+        value: parsed,
+        archivedAt: new Date().toISOString(),
+      });
+      migratedRecords += 1;
+    }
+
+    // Clear KKN-owned browser keys only after all archive writes succeeded.
+    allKeys.forEach((key) => storage.removeItem(key));
+    return { migratedRecords, removedKeys: allKeys.length };
+  }
+
+  // Only the verified Super Admin may perform the first shared-data import.
+  // Other browsers keep their old data until the primary import is completed.
+  if (!options.allowInitialImport) return { migratedRecords: 0, removedKeys: 0 };
+
+  const knownSources = new Map(LEGACY_MODULE_KEYS.map((item) => [item.key, item]));
+
   for (const key of allKeys) {
     if (
       SENSITIVE_LEGACY_KEYS.has(key) ||
@@ -254,6 +315,7 @@ export async function migrateLegacyLocalStorageToSupabase(): Promise<{
     }
   }
 
+  // A durable marker enables safe cache cleanup on every other signed-in device.
   await upsertWorkspaceRecord('legacy_storage', {
     id: 'migration_complete_v1',
     completedAt: new Date().toISOString(),
