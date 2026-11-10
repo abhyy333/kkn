@@ -148,6 +148,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
+      if (record.confirmationPending) {
+        await resendVerificationEmail(cleanEmail);
+        setVerifiedRecord(null);
+        setVerificationSentEmail(cleanEmail);
+        setSuccessMsg('Akun Auth untuk email ini sudah dibuat, tetapi verifikasi awal belum selesai. Tautan verifikasi berhasil diminta ulang.');
+        setResendCooldown(true);
+        setTimeout(() => setResendCooldown(false), 15000);
+        return;
+      }
+
       if (
         record.status === 'activated' &&
         record.activatedUid &&
