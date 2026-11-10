@@ -352,7 +352,17 @@ function AppContent() {
     const reconcileMembers = () => {
       const memberMap = new Map<string, Member>();
       // 1. Base team structure
-      INITIAL_MEMBERS.forEach((m) => memberMap.set(m.id, { ...m }));
+      INITIAL_MEMBERS.forEach((m) =>
+        memberMap.set(m.id, {
+          ...m,
+          email: '',
+          registeredEmail: undefined,
+          authUid: undefined,
+          accountStatus: 'unregistered',
+          acceptedAt: undefined,
+          disabledAt: undefined,
+        })
+      );
 
       // 2. Local persisted member updates (only merge valid non-fabricated fields onto known members)
       try {
@@ -364,8 +374,6 @@ function AppContent() {
               if (!m || !m.id || isFabricatedLegacyRecord(m)) return;
               const existing = memberMap.get(m.id);
               if (existing) {
-                const validEmail =
-                  m.email && !isFabricatedLegacyRecord({ email: m.email }) ? m.email : existing.email;
                 memberMap.set(m.id, {
                   ...existing,
                   name: m.name || existing.name,
