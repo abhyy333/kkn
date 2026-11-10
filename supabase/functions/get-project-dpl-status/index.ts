@@ -1,158 +1,222 @@
-// @ts-nocheck
-// =============================================================================
-// SUPABASE EDGE FUNCTION: get-project-dpl-status (v1.0.0)
-// Project: scslevzuxxkfcuvwbtty
-// Description:
-//   Authoritative server-side endpoint for DPL status and identity synchronization:
-//   - Returns official DPL supervisor profile and active status.
-//   - Returns raw registered email ONLY to authorized Super Admin in `admin_private`.
-//   - Returns masked email or status indicators to ordinary workspace members.
-// Security:
-//   - Strict CORS origin allowlist
-//   - OPTIONS returns HTTP 200
-// =============================================================================
+import { createClient } from "npm:@supabase/supabase-js@2";
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
-import { handleCorsPreflight, getCorsHeaders, isAllowedOrigin } from '../_shared/cors.ts';
+const ALLOWED_ORIGINS = new Set([
+  "https://kkn-beta.vercel.app",
+  "http://localhost:5173",
+]);
 
-const OFFICIAL_DPL_MEMBER_ID = 'c7bf53d4-1c27-424e-992a-7c7c0f98707a';
-const OFFICIAL_DPL_EMAIL = 'ellymaelani@gmail.com';
-const SUPER_ADMIN_PRIMARY_EMAIL = 'abhyy333@gmail.com';
+const PROJECT_ID = "f5dcc382-8cc9-465a-b919-e58d6a688eea";
+const DPL_MEMBER_ID = "c7bf53d4-1c27-424e-992a-7c7c0f98707a";
+
+function cors(origin: string | null): Record<string, string> {
+  const allowedOrigin = origin && ALLOWED_ORIGINS.has(origin)
+    ? origin
+    : "https://kkn-beta.vercel.app";
+
+  return {
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Headers": "authorization, apikey, x-client-info, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Content-Type": "application/json",
+    "Vary": "Origin",
+  };
+}
+
+function json(body: Record<string, unknown>, status: number, headers: Record<string, string>) {
+  return new Response(JSON.stringify(body), { status, headers });
+}
+
+function readKey(envName: string, legacyName?: string): string | null {
+  const raw = Deno.env.get(envName);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      const value = parsed?.default ?? Object.values(parsed ?? {})[0];
+      if (typeof value === "string") return value;
+    } catch {
+      // Fall through to legacy environment variable.
+    }
+  }
+  return legacyName ? Deno.env.get(legacyName) ?? null : null;
+}
 
 Deno.serve(async (req: Request) => {
-  const origin = req.headers.get('Origin') || req.headers.get('origin');
+  const origin = req.headers.get("origin");
+  const headers = cors(origin);
 
-  if (req.method === 'OPTIONS') {
-    return handleCorsPreflight(req);
+  if (req.method === "OPTIONS") {
+    if (origin && !ALLOWED_ORIGINS.has(origin)) return json({ error: "Origin not allowed" }, 403, headers);
+    return new Response("ok", { status: 200, headers });
   }
 
-  if (origin && !isAllowedOrigin(origin)) {
-    return new Response(
-      JSON.stringify({ error: `Forbidden: Origin '${origin}' is not allowed by CORS policy.` }),
-      { status: 403, headers: { 'Content-Type': 'application/json', 'Vary': 'Origin' } }
-    );
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
+  if (origin && !ALLOWED_ORIGINS.has(origin)) return json({ error: "Origin not allowed" }, 403, headers);
+
+  const authorization = req.headers.get("authorization");
+  if (!authorization?.startsWith("Bearer ")) {
+    return json({ error: "Authentication required" }, 401, headers);
   }
 
-  const corsHeaders = getCorsHeaders(origin);
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const publishableKey = readKey("SUPABASE_PUBLISHABLE_KEYS", "SUPABASE_ANON_KEY");
+  const secretKey = readKey("SUPABASE_SECRET_KEYS", "SUPABASE_SERVICE_ROLE_KEY");
+
+  if (!supabaseUrl || !publishableKey || !secretKey) {
+    console.error("DPL status endpoint configuration is incomplete");
+    return json({ error: "Server configuration is incomplete" }, 500, headers);
+  }
+
+  const userClient = createClient(supabaseUrl, publishableKey, {
+    global: { headers: { Authorization: authorization } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const adminClient = createClient(supabaseUrl, secretKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-    const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+    const { data: authData, error: authError } = await userClient.auth.getUser();
+    const caller = authData?.user;
 
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
-      return new Response(
-        JSON.stringify({ error: 'Server configuration missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    if (authError || !caller?.id || !caller.email || !caller.email_confirmed_at) {
+      return json({ error: "A verified signed-in account is required" }, 401, headers);
     }
 
-    const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-
-    // Check optional caller session
-    let isSuperAdmin = false;
-    const authHeader = req.headers.get('Authorization');
-    if (authHeader) {
-      try {
-        const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-          global: { headers: { Authorization: authHeader } },
-        });
-        const { data: userData } = await userClient.auth.getUser();
-        if (userData?.user?.email) {
-          const callerEmail = userData.user.email.trim().toLowerCase();
-          if (callerEmail === SUPER_ADMIN_PRIMARY_EMAIL) {
-            isSuperAdmin = true;
-          } else {
-            const { data: adminRow } = await adminClient
-              .from('admin_accounts')
-              .select('role, is_active')
-              .or(`auth_user_id.eq.${userData.user.id},user_id.eq.${userData.user.id},email.ilike.${callerEmail}`)
-              .maybeSingle();
-            if (adminRow && adminRow.is_active !== false && adminRow.role === 'super_admin') {
-              isSuperAdmin = true;
-            }
-          }
-        }
-      } catch {}
+    let requestedProjectId = PROJECT_ID;
+    try {
+      const body = await req.json();
+      if (body?.project_id && body.project_id !== PROJECT_ID) {
+        return json({ error: "Project not found or access denied" }, 404, headers);
+      }
+      if (body?.project_id) requestedProjectId = body.project_id;
+    } catch {
+      // Empty body is allowed; use the fixed KKN SPACE project.
     }
 
-    // Fetch official DPL from database or fallback to official constants
-    let supervisor = {
-      id: OFFICIAL_DPL_MEMBER_ID,
-      name: 'Lalu Muhammad Aby Dujana, M.Si.',
-      nip: '198910222024061001',
-      title: 'Dosen Pembimbing Lapangan',
-      position: 'Dosen Pembimbing Lapangan',
-      faculty: 'S1 Ilmu Lingkungan',
-      study_program: 'S1 Ilmu Lingkungan',
-      division: 'DPL / Supervisi',
-      category: 'supervisor',
-    };
-
-    const { data: memRow } = await adminClient
-      .from('members')
-      .select('*')
-      .eq('id', OFFICIAL_DPL_MEMBER_ID)
+    const { data: callerMembership, error: membershipError } = await adminClient
+      .from("member_access")
+      .select("member_id,role,is_active")
+      .eq("project_id", requestedProjectId)
+      .eq("user_id", caller.id)
+      .eq("is_active", true)
       .maybeSingle();
 
-    if (memRow) {
-      supervisor = {
-        id: memRow.id,
-        name: memRow.name || supervisor.name,
-        nip: memRow.nip || supervisor.nip,
-        title: memRow.title || memRow.position || supervisor.title,
-        position: memRow.position || supervisor.position,
-        faculty: memRow.faculty || memRow.program_study || supervisor.faculty,
-        study_program: memRow.program_study || memRow.faculty || supervisor.study_program,
-        division: memRow.division || supervisor.division,
-        category: memRow.member_category || 'supervisor',
-      };
+    if (membershipError) {
+      console.error("DPL status membership lookup failed", membershipError.code);
+      return json({ error: "Unable to verify project access" }, 500, headers);
     }
 
-    // Fetch registered email record
-    const { data: regRow } = await adminClient
-      .from('registered_emails')
-      .select('*')
-      .eq('member_id', OFFICIAL_DPL_MEMBER_ID)
+    const { data: adminAccount, error: adminError } = await adminClient
+      .from("admin_accounts")
+      .select("role,is_active")
+      .eq("user_id", caller.id)
       .maybeSingle();
 
-    const dplEmail = regRow?.email || OFFICIAL_DPL_EMAIL;
-    const activationStatus = regRow?.status || 'activated';
-    const isActive = regRow?.is_active !== false && activationStatus !== 'disabled';
+    if (adminError) {
+      console.error("DPL status admin lookup failed", adminError.code);
+      return json({ error: "Unable to verify administrator access" }, 500, headers);
+    }
 
-    // Masked email for non-super_admin
-    const maskedEmail = dplEmail.replace(/^(.{2})(.*)(@.*)$/, (_, a, b, c) => `${a}${'*'.repeat(Math.max(3, b.length))}${c}`);
+    const isSuperAdmin = Boolean(adminAccount?.is_active && adminAccount.role === "super_admin");
 
-    const responsePayload: any = {
+    if (!callerMembership && !isSuperAdmin) {
+      return json({ error: "You do not have access to this KKN project" }, 403, headers);
+    }
+
+    const { data: supervisor, error: supervisorError } = await adminClient
+      .from("members")
+      .select("id,project_id,full_name,position_title,division,study_program,institutional_id,member_category,status,auth_user_id")
+      .eq("id", DPL_MEMBER_ID)
+      .eq("project_id", requestedProjectId)
+      .eq("member_category", "supervisor")
+      .maybeSingle();
+
+    if (supervisorError) {
+      console.error("DPL profile lookup failed", supervisorError.code);
+      return json({ error: "Unable to load supervisor profile" }, 500, headers);
+    }
+
+    if (!supervisor) {
+      return json({ error: "Supervisor profile not found" }, 404, headers);
+    }
+
+    const { data: registration, error: registrationError } = await adminClient
+      .from("registered_emails")
+      .select("email,is_enabled,activated_at")
+      .eq("project_id", requestedProjectId)
+      .eq("member_id", supervisor.id)
+      .maybeSingle();
+
+    if (registrationError) {
+      console.error("DPL registration lookup failed", registrationError.code);
+      return json({ error: "Unable to load DPL registration status" }, 500, headers);
+    }
+
+    const { data: dplAccess, error: dplAccessError } = await adminClient
+      .from("member_access")
+      .select("role,is_active,user_id")
+      .eq("project_id", requestedProjectId)
+      .eq("member_id", supervisor.id)
+      .maybeSingle();
+
+    if (dplAccessError) {
+      console.error("DPL role lookup failed", dplAccessError.code);
+      return json({ error: "Unable to load DPL role status" }, 500, headers);
+    }
+
+    let authConfirmed = false;
+    if (supervisor.auth_user_id) {
+      const { data: targetAuth, error: targetAuthError } =
+        await adminClient.auth.admin.getUserById(supervisor.auth_user_id);
+
+      if (!targetAuthError && targetAuth?.user) {
+        authConfirmed = Boolean(targetAuth.user.email_confirmed_at);
+      }
+    }
+
+    const emailRegistered = Boolean(registration?.email && registration.is_enabled);
+    const roleIsDpl = Boolean(dplAccess?.role === "dpl" && dplAccess.is_active && dplAccess.user_id === supervisor.auth_user_id);
+    const isActive = Boolean(
+      emailRegistered &&
+      registration?.activated_at &&
+      supervisor.status === "active" &&
+      supervisor.auth_user_id &&
+      authConfirmed &&
+      roleIsDpl
+    );
+
+    const accountStatus = !emailRegistered
+      ? "not_registered"
+      : isActive
+        ? "active"
+        : registration?.is_enabled
+          ? "pending_activation"
+          : "disabled";
+
+    return json({
       success: true,
-      supervisor,
-      account: {
-        email_registered: true,
-        email: isSuperAdmin ? dplEmail : maskedEmail,
-        activation_status: 'activated', // Verified database state is active
-        is_active: true,
-        role: 'dpl',
+      project_id: requestedProjectId,
+      supervisor: {
+        id: supervisor.id,
+        full_name: supervisor.full_name,
+        position_title: supervisor.position_title,
+        division: supervisor.division,
+        study_program: supervisor.study_program,
+        institutional_id: supervisor.institutional_id,
+        member_category: supervisor.member_category,
       },
-    };
-
-    if (isSuperAdmin) {
-      responsePayload.admin_private = {
-        email: dplEmail,
-        registered_at: regRow?.registered_at || '2026-07-01T00:00:00.000Z',
-        auth_user_id: regRow?.auth_user_id || regRow?.activated_uid || null,
-      };
-    }
-
-    return new Response(
-      JSON.stringify(responsePayload),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  } catch (err: any) {
-    return new Response(
-      JSON.stringify({ error: err?.message || 'Gagal memuat status DPL' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+      account: {
+        email_registered: emailRegistered,
+        activation_status: accountStatus,
+        is_active: isActive,
+        role: roleIsDpl ? "dpl" : null,
+      },
+      // The email address is returned only to an active super administrator.
+      ...(isSuperAdmin ? { admin_private: { email: registration?.email ?? null } } : {}),
+    }, 200, headers);
+  } catch (error) {
+    console.error("Unexpected DPL status error", error instanceof Error ? error.message : "unknown");
+    return json({ error: "Unable to retrieve DPL status" }, 500, headers);
   }
 });
