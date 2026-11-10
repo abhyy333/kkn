@@ -16,10 +16,10 @@ export interface DplAccountStatusData {
   };
   account: {
     email_registered: boolean;
-    email: string;
-    activation_status: 'activated' | 'pending_activation';
+    email?: string | null;
+    activation_status: 'activated' | 'active' | 'pending_activation' | 'not_registered' | 'disabled';
     is_active: boolean;
-    role: string;
+    role: string | null;
   };
   admin_private?: {
     email?: string;
@@ -59,27 +59,9 @@ export function useDplAccountStatus(actorEmail?: string) {
         }
       }
 
-      // 2. Fallback to local server API proxy `/api/dpl/status`
-      if (!result) {
-        try {
-          const res = await fetch('/api/dpl/status', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ project_id: OFFICIAL_PROJECT_ID, actorEmail }),
-          });
-          const apiData = await res.json();
-          if (res.ok && apiData.success) {
-            result = apiData;
-          }
-        } catch (apiErr) {
-          console.warn('API proxy /api/dpl/status notice:', apiErr);
-        }
-      }
-
       if (result) {
         setData(result as DplAccountStatusData);
       } else {
-        // Fallback authoritative verified state (never convert to "Belum Didaftarkan")
         setData({
           supervisor: {
             id: OFFICIAL_DPL_MEMBER_ID,
@@ -93,13 +75,12 @@ export function useDplAccountStatus(actorEmail?: string) {
             category: 'supervisor',
           },
           account: {
-            email_registered: true,
-            email: actorEmail === 'abhyy333@gmail.com' ? 'ellymaelani@gmail.com' : 'el******@gmail.com',
-            activation_status: 'activated',
-            is_active: true,
-            role: 'dpl',
+            email_registered: false,
+            email: null,
+            activation_status: 'not_registered',
+            is_active: false,
+            role: null,
           },
-          admin_private: actorEmail === 'abhyy333@gmail.com' ? { email: 'ellymaelani@gmail.com' } : undefined,
         });
       }
     } catch (err: any) {
