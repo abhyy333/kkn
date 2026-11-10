@@ -354,6 +354,8 @@ export const MembersView: React.FC<MembersViewProps> = ({
                     dplRegStatus.email
                       ? <strong className="font-mono text-stone-800">{dplRegStatus.email}</strong>
                       : <span className="text-stone-500 italic">Terdaftar (email hanya terlihat Admin)</span>
+                  ) : dplRegStatus?.status === 'disabled' ? (
+                    <span className="text-red-600 italic">Akun DPL Nonaktif</span>
                   ) : dplRegStatus ? (
                     <span className="text-stone-500 italic">Belum Didaftarkan</span>
                   ) : (
@@ -386,6 +388,10 @@ export const MembersView: React.FC<MembersViewProps> = ({
                       <span>Menunggu Aktivasi</span>
                     </>
                   )}
+                </span>
+              ) : dplRegStatus?.status === 'disabled' ? (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-red-50 border border-red-200 text-red-700 font-medium">
+                  <span>Akun DPL Nonaktif</span>
                 </span>
               ) : dplRegStatus ? (
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-stone-100 border border-stone-200 text-stone-600 font-medium">
