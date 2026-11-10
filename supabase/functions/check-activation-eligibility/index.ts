@@ -1,187 +1,194 @@
 // @ts-nocheck
-// =============================================================================
-// SUPABASE EDGE FUNCTION: check-activation-eligibility (v1.0.0)
-// Project: scslevzuxxkfcuvwbtty
-// Description:
-//   Public unauthenticated activation eligibility checking:
-//   - Rate-limited per IP.
-//   - Validates exactly ONE submitted email against registered_emails using service role.
-//   - Never exposes complete email registry or other members' data.
-//   - Clearly distinguishes:
-//     * unregistered_email: "Email ini belum didaftarkan oleh Administrator KKN."
-//     * delivery_failed: "Undangan belum dapat dikirim. Silakan hubungi Administrator KKN."
-//     * existing_auth_account: "Akun untuk email ini sudah aktif."
-//     * pending_activation: Eligible for password setup.
-// =============================================================================
+// Public activation eligibility lookup. Never exposes the registration directory.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { handleCorsPreflight, getCorsHeaders, isAllowedOrigin } from '../_shared/cors.ts';
 
-// Simple in-memory rate limiter per IP for Edge runtime (15 requests/minute)
-const ipRateMap = new Map<string, { count: number; resetAt: number }>();
-function checkRateLimit(ip: string, limit = 15, windowMs = 60000): boolean {
+const PROJECT_ID = 'f5dcc382-8cc9-465a-b919-e58d6a688eea';
+const ipAttempts = new Map<string, { count: number; resetAt: number }>();
+
+function rateLimit(ip: string, limit = 15, windowMs = 60_000) {
   const now = Date.now();
-  const entry = ipRateMap.get(ip);
-  if (!entry || entry.resetAt < now) {
-    ipRateMap.set(ip, { count: 1, resetAt: now + windowMs });
+  const item = ipAttempts.get(ip);
+  if (!item || item.resetAt <= now) {
+    ipAttempts.set(ip, { count: 1, resetAt: now + windowMs });
     return true;
   }
-  if (entry.count >= limit) {
-    return false;
-  }
-  entry.count += 1;
+  if (item.count >= limit) return false;
+  item.count += 1;
   return true;
 }
 
+function reply(body: Record<string, unknown>, status: number, cors: Record<string,string>) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...cors, 'Cache-Control': 'no-store' },
+  });
+}
+
 Deno.serve(async (req: Request) => {
-  const origin = req.headers.get('Origin') || req.headers.get('origin');
+  const origin = req.headers.get('origin');
+  if (req.method === 'OPTIONS') return handleCorsPreflight(req);
+  const cors = getCorsHeaders(origin);
+  if (req.method !== 'POST') return reply({ eligible: false, code: 'method_not_allowed', error: 'Method not allowed' }, 405, cors);
+  if (origin && !isAllowedOrigin(origin)) return reply({ eligible: false, code: 'origin_not_allowed', error: 'Origin not allowed' }, 403, cors);
 
-  // 1. CORS Preflight
-  if (req.method === 'OPTIONS') {
-    return handleCorsPreflight(req);
-  }
-
-  // 2. Validate Origin
-  if (origin && !isAllowedOrigin(origin)) {
-    return new Response(
-      JSON.stringify({ error: `Forbidden: Origin '${origin}' is not allowed by CORS policy.` }),
-      { status: 403, headers: { 'Content-Type': 'application/json', 'Vary': 'Origin' } }
-    );
-  }
-
-  const corsHeaders = getCorsHeaders(origin);
-
-  // 3. Client IP Rate Limiting
-  const clientIp = req.headers.get('x-forwarded-for') || req.headers.get('cf-connecting-ip') || 'anon';
-  if (!checkRateLimit(clientIp, 20, 60000)) {
-    return new Response(
-      JSON.stringify({
-        eligible: false,
-        code: 'rate_limit',
-        error: 'Terlalu banyak percobaan. Silakan coba kembali dalam 1 menit.',
-      }),
-      { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  }
+  const ip = (req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || 'unknown').split(',')[0].trim();
+  if (!rateLimit(ip)) return reply({
+    eligible: false,
+    code: 'rate_limit',
+    error: 'Terlalu banyak percobaan. Coba kembali dalam satu menit.',
+  }, 429, cors);
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-    const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
-      return new Response(
-        JSON.stringify({ error: 'Server configuration missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+    const url = Deno.env.get('SUPABASE_URL') ?? '';
+    const secret = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    if (!url || !secret) return reply({
+      eligible: false,
+      code: 'server_configuration_error',
+      error: 'Layanan aktivasi belum terkonfigurasi.',
+    }, 500, cors);
 
     const body = await req.json();
-    const email = body?.email;
-
-    if (!email || typeof email !== 'string') {
-      return new Response(
-        JSON.stringify({ eligible: false, code: 'invalid_format', error: 'Format email tidak valid.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return reply({ eligible: false, code: 'invalid_format', error: 'Masukkan alamat email yang valid.' }, 400, cors);
     }
 
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
-      return new Response(
-        JSON.stringify({ eligible: false, code: 'invalid_format', error: 'Format email tidak valid.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+    const admin = createClient(url, secret, { auth: { persistSession: false, autoRefreshToken: false } });
 
-    // Query single record using service role client
-    const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-
-    const { data: reg, error: dbError } = await adminClient
+    const { data: registration, error: registrationError } = await admin
       .from('registered_emails')
-      .select('id, email, member_id, name, member_name, position, division, role, system_role, status, is_active, auth_user_id, activated_uid, invitation_delivery_status, invitation_delivery_error')
-      .ilike('email', cleanEmail)
+      .select('id,email,member_id,project_id,is_enabled,activated_at')
+      .eq('project_id', PROJECT_ID)
+      .eq('email', email)
       .maybeSingle();
 
-    if (dbError) {
-      console.warn('DB error checking registration:', dbError);
+    // A database error must never be interpreted as "not registered".
+    if (registrationError) {
+      console.error('activation registry lookup failed', registrationError.code);
+      return reply({
+        eligible: false,
+        code: 'registry_unavailable',
+        error: 'Database registrasi sedang tidak dapat diakses. Coba lagi atau hubungi Administrator.',
+      }, 503, cors);
     }
 
-    // 1. Unregistered email
-    if (!reg) {
-      return new Response(
-        JSON.stringify({
+    if (!registration || !registration.is_enabled || !registration.member_id) {
+      return reply({
+        eligible: false,
+        code: 'not_registered',
+        error: 'Email ini belum didaftarkan oleh Administrator KKN.',
+      }, 200, cors);
+    }
+
+    const { data: member, error: memberError } = await admin
+      .from('members')
+      .select('id,full_name,position_title,division,study_program,faculty,institutional_id,member_category,status,auth_user_id')
+      .eq('id', registration.member_id)
+      .eq('project_id', PROJECT_ID)
+      .maybeSingle();
+
+    if (memberError) {
+      console.error('activation member lookup failed', memberError.code);
+      return reply({
+        eligible: false,
+        code: 'member_lookup_unavailable',
+        error: 'Data profil anggota belum dapat diverifikasi. Coba lagi.',
+      }, 503, cors);
+    }
+
+    if (!member) return reply({
+      eligible: false,
+      code: 'member_profile_missing',
+      error: 'Email terdaftar tetapi profil anggotanya tidak ditemukan. Hubungi Administrator.',
+    }, 409, cors);
+
+    if (member.status === 'inactive') return reply({
+      eligible: false,
+      code: 'account_disabled',
+      error: 'Akun ini sedang dinonaktifkan oleh Administrator KKN.',
+    }, 200, cors);
+
+    if (member.auth_user_id) {
+      const { data: linked, error: linkedError } = await admin.auth.admin.getUserById(member.auth_user_id);
+      if (linkedError || !linked?.user) {
+        console.error('linked auth user unavailable', linkedError?.message);
+        return reply({
           eligible: false,
-          code: 'unregistered_email',
-          message: 'Email ini belum didaftarkan oleh Administrator KKN.',
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+          code: 'account_reconciliation_required',
+          error: 'Profil sudah memiliki tautan akun yang tidak dapat diverifikasi. Hubungi Administrator.',
+        }, 409, cors);
+      }
 
-    // 2. Disabled account
-    if (reg.status === 'disabled' || reg.status === 'revoked' || reg.is_active === false) {
-      return new Response(
-        JSON.stringify({
+      if (linked.user.email?.trim().toLowerCase() !== email) {
+        return reply({
           eligible: false,
-          code: 'account_disabled',
-          message: 'Akun ini telah dinonaktifkan oleh Administrator KKN.',
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+          code: 'account_reconciliation_required',
+          error: 'Email login tidak cocok dengan akun yang tertaut. Hubungi Administrator.',
+        }, 409, cors);
+      }
+
+      return reply({
+        eligible: false,
+        code: linked.user.email_confirmed_at ? 'already_active' : 'confirmation_pending',
+        error: linked.user.email_confirmed_at
+          ? 'Akun untuk email ini sudah aktif. Silakan masuk.'
+          : 'Akun sudah dibuat. Periksa email untuk menyelesaikan konfirmasi.',
+      }, 200, cors);
     }
 
-    // 3. Email delivery failed (e.g. Gmail SMTP 535) and not yet activated
-    const hasAuthAccount = Boolean(reg.auth_user_id || reg.activated_uid);
-    if (!hasAuthAccount && reg.invitation_delivery_status === 'failed') {
-      return new Response(
-        JSON.stringify({
-          eligible: false,
-          code: 'delivery_failed',
-          name: reg.name || reg.member_name,
-          message: 'Undangan belum dapat dikirim. Silakan hubungi Administrator KKN.',
-          delivery_error: reg.invitation_delivery_error,
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    const { data: users, error: usersError } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    if (usersError) {
+      console.error('Auth duplicate check failed', usersError.message);
+      return reply({
+        eligible: false,
+        code: 'auth_lookup_unavailable',
+        error: 'Status akun Auth belum dapat diperiksa. Coba lagi.',
+      }, 503, cors);
     }
 
-    // 4. Already activated Auth account
-    if (reg.status === 'activated' || (hasAuthAccount && cleanEmail !== 'abhyy333@gmail.com')) {
-      return new Response(
-        JSON.stringify({
-          eligible: false,
-          code: 'existing_auth_account',
-          name: reg.name || reg.member_name,
-          message: 'Akun untuk email ini sudah aktif. Silakan masuk melalui tab "Masuk Akun" menggunakan email dan password Anda.',
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+    const orphanAuth = users.users.find((user) => user.email?.trim().toLowerCase() === email);
+    if (orphanAuth) return reply({
+      eligible: false,
+      code: 'account_reconciliation_required',
+      error: 'Email sudah memiliki akun Auth yang belum tertaut ke profil anggota. Hubungi Administrator.',
+    }, 409, cors);
 
-    // 5. Eligible for activation
-    const displayName = reg.name || reg.member_name || 'Anggota KKN';
-    return new Response(
-      JSON.stringify({
-        eligible: true,
-        code: 'pending_activation',
-        data: {
-          email: reg.email,
-          name: displayName,
-          position: reg.position || 'Anggota',
-          division: reg.division || 'Divisi Acara',
-          role: reg.role || reg.system_role || 'member',
-          member_id: reg.member_id,
-        },
-        message: `Identitas terverifikasi dari database: ${displayName} (${reg.position || 'Anggota'})`,
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  } catch (err: any) {
-    return new Response(
-      JSON.stringify({ eligible: false, code: 'server_error', error: err?.message || 'Gagal memproses validasi email.' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    const role = member.member_category === 'supervisor'
+      ? 'dpl'
+      : member.position_title === 'Ketua'
+        ? 'chair'
+        : member.position_title === 'Sekretaris'
+          ? 'secretary'
+          : member.position_title === 'Bendahara'
+            ? 'treasurer'
+            : 'member';
+
+    return reply({
+      eligible: true,
+      code: 'pending_activation',
+      data: {
+        email: registration.email,
+        member_id: member.id,
+        name: member.full_name,
+        position: member.position_title,
+        division: member.division,
+        study_program: member.study_program,
+        faculty: member.faculty,
+        institutional_id: member.institutional_id,
+        member_category: member.member_category,
+        role,
+        system_role: member.member_category === 'supervisor' ? 'dpl' : 'user',
+      },
+      message: 'Email ditemukan pada daftar registrasi resmi Admin KKN.',
+    }, 200, cors);
+  } catch (error) {
+    console.error('activation eligibility unexpected error', error instanceof Error ? error.message : 'unknown');
+    return reply({
+      eligible: false,
+      code: 'server_error',
+      error: 'Pemeriksaan email gagal. Silakan coba lagi.',
+    }, 500, cors);
   }
 });
