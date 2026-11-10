@@ -165,23 +165,6 @@ const memoryProfileCache = new Map<string, UserProfile>();
 // Authoritative Initial Registered Emails Directory
 // Strictly contains ONLY confirmed super_admin abhyy333@gmail.com (Abdul Habir Al Majdi - Divisi Acara 1).
 // Other members start with empty email ("Belum Didaftarkan") until registered by super_admin.
-export const INITIAL_REGISTERED_EMAILS: RegisteredEmailRecord[] = [
-  {
-    id: 'abhyy333_gmail_com',
-    email: 'abhyy333@gmail.com',
-    name: 'Abdul Habir Al Majdi',
-    position: 'Divisi Acara 1',
-    division: 'Divisi Acara',
-    role: 'member',
-    systemRole: 'super_admin',
-    memberId: 'm-4',
-    status: 'activated',
-    registeredBy: 'System Bootstrap',
-    registeredAt: '2026-07-15T08:00:00.000Z',
-    activatedAt: '2026-07-19T08:30:00.000Z',
-  },
-];
-
 function sanitizeEmailId(email: string): string {
   return email.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
 }
