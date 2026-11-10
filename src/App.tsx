@@ -810,147 +810,103 @@ function AppContent() {
 
   const handleUpdateMember = async (updatedMember: Member) => {
     const existingMember = members.find((m) => m.id === updatedMember.id);
+    if (!existingMember?.databaseId) {
+      throw new Error('ID anggota Supabase tidak ditemukan. Muat ulang daftar anggota.');
+    }
+
     const isOwnRecord = Boolean(
       user &&
-        existingMember &&
-        ((profile?.memberId && profile.memberId === existingMember.id) ||
-          (existingMember.authUid && existingMember.authUid === user.uid) ||
-          (user.email &&
-            existingMember.email &&
-            existingMember.email.toLowerCase() === user.email.toLowerCase()) ||
-          (user.email &&
-            existingMember.registeredEmail &&
-            existingMember.registeredEmail.toLowerCase() ===
-              user.email.toLowerCase()) ||
-          (user.email?.toLowerCase() === 'abhyy333@gmail.com' &&
-            existingMember.id === 'm-4'))
+      (
+        existingMember.databaseId === profile?.memberId ||
+        existingMember.authUid === user.uid ||
+        existingMember.email?.toLowerCase() === user.email?.toLowerCase() ||
+        existingMember.registeredEmail?.toLowerCase() === user.email?.toLowerCase()
+      )
     );
 
-    if (!isSuperAdmin && !isAdmin && !isOwnRecord) {
+    if (!isSuperAdmin && !isOwnRecord) {
       throw new Error(
         'Akses ditolak: Anda hanya diizinkan mengubah profil dan data keanggotaan Anda sendiri.'
       );
     }
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase belum terkonfigurasi. Perubahan profil tidak dapat disimpan.');
+    }
 
-    // Enforce field-level protection: non-super_admin users can NEVER modify protected security fields
-    const sanitizedMember: Member = existingMember
-      ? {
-          ...existingMember,
-          ...updatedMember,
-          name: updatedMember.name?.trim() || existingMember.name,
-          role: updatedMember.role?.trim() || existingMember.role,
-          position:
-            updatedMember.role?.trim() ||
-            updatedMember.position?.trim() ||
-            existingMember.position ||
-            existingMember.role,
-          division: updatedMember.division?.trim() || existingMember.division,
-          nim: updatedMember.nim?.trim() || existingMember.nim,
-          major: updatedMember.major?.trim() || existingMember.major,
-          faculty: updatedMember.faculty?.trim() || existingMember.faculty,
-          phone: updatedMember.phone?.trim() || existingMember.phone,
-          emergencyContact:
-            updatedMember.emergencyContact?.trim() ||
-            existingMember.emergencyContact,
-          bio:
-            updatedMember.bio !== undefined
-              ? updatedMember.bio
-              : existingMember.bio,
-          avatar: updatedMember.avatar || existingMember.avatar,
-          avatarStoragePath:
-            updatedMember.avatarStoragePath ||
-            existingMember.avatarStoragePath,
-          responsibilities: Array.isArray(updatedMember.responsibilities)
-            ? updatedMember.responsibilities
-            : existingMember.responsibilities,
-          // Strictly lock security & authorization fields unless super_admin
-          id: existingMember.id,
-          systemRole: isSuperAdmin
-            ? updatedMember.systemRole ?? existingMember.systemRole
-            : existingMember.systemRole,
-          authUid: isSuperAdmin
-            ? updatedMember.authUid ?? existingMember.authUid
-            : existingMember.authUid,
-          accountStatus: isSuperAdmin
-            ? updatedMember.accountStatus ?? existingMember.accountStatus
-            : existingMember.accountStatus,
-          email: isSuperAdmin
-            ? updatedMember.email ?? existingMember.email
-            : existingMember.email,
-          registeredEmail: isSuperAdmin
-            ? updatedMember.registeredEmail ?? existingMember.registeredEmail
-            : existingMember.registeredEmail,
-          acceptedAt: existingMember.acceptedAt,
-          disabledAt: isSuperAdmin
-            ? updatedMember.disabledAt ?? existingMember.disabledAt
-            : existingMember.disabledAt,
-        }
-      : updatedMember;
+    const sanitizedMember: Member = {
+      ...existingMember,
+      ...updatedMember,
+      id: existingMember.id,
+      databaseId: existingMember.databaseId,
+      name: updatedMember.name?.trim() || existingMember.name,
+      role: isSuperAdmin ? (updatedMember.role?.trim() || existingMember.role) : existingMember.role,
+      position: isSuperAdmin
+        ? (updatedMember.position?.trim() || updatedMember.role?.trim() || existingMember.position)
+        : existingMember.position,
+      division: isSuperAdmin ? (updatedMember.division?.trim() || existingMember.division) : existingMember.division,
+      nim: isSuperAdmin ? (updatedMember.nim?.trim() || existingMember.nim) : existingMember.nim,
+      major: isSuperAdmin ? (updatedMember.major?.trim() || existingMember.major) : existingMember.major,
+      faculty: isSuperAdmin ? (updatedMember.faculty?.trim() || existingMember.faculty) : existingMember.faculty,
+      phone: updatedMember.phone?.trim() ?? existingMember.phone,
+      bio: updatedMember.bio !== undefined ? updatedMember.bio : existingMember.bio,
+      avatar: updatedMember.avatar || existingMember.avatar,
+      avatarStoragePath: updatedMember.avatarStoragePath || existingMember.avatarStoragePath,
+      responsibilities: isSuperAdmin && Array.isArray(updatedMember.responsibilities)
+        ? updatedMember.responsibilities
+        : existingMember.responsibilities,
+      systemRole: existingMember.systemRole,
+      authUid: existingMember.authUid,
+      accountStatus: existingMember.accountStatus,
+      email: existingMember.email,
+      registeredEmail: existingMember.registeredEmail,
+      acceptedAt: existingMember.acceptedAt,
+      disabledAt: existingMember.disabledAt,
+    };
 
-    setMembers((prev) => {
-      const exists = prev.some((m) => m.id === sanitizedMember.id);
-      const next = exists
-        ? prev.map((m) => (m.id === sanitizedMember.id ? sanitizedMember : m))
-        : [...prev, sanitizedMember];
-      
-      return next;
-    });
+    if (isSuperAdmin) {
+      const { error } = await supabase
+        .from('members')
+        .update({
+          full_name: sanitizedMember.name,
+          position_title: sanitizedMember.position || sanitizedMember.role,
+          division: sanitizedMember.division,
+          student_number: sanitizedMember.nim || null,
+          study_program: sanitizedMember.major || null,
+          faculty: sanitizedMember.faculty || null,
+          phone_private: sanitizedMember.phone || null,
+          profile_bio: sanitizedMember.bio || null,
+          avatar_path: sanitizedMember.avatarStoragePath || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingMember.databaseId)
+        .eq('project_id', OFFICIAL_PROJECT_ID);
 
-    // If the authenticated user updated their own record, sync display metadata to AuthContext & session cache
+      if (error) {
+        throw new Error(`Gagal memperbarui data anggota di Supabase: ${error.message}`);
+      }
+    } else {
+      const { error } = await supabase.rpc('update_own_member_profile', {
+        p_member_id: existingMember.databaseId,
+        p_name: sanitizedMember.name,
+        p_phone: sanitizedMember.phone || null,
+        p_bio: sanitizedMember.bio || null,
+        p_avatar_path: sanitizedMember.avatarStoragePath || null,
+      });
+      if (error) {
+        throw new Error(`Gagal memperbarui profil pribadi: ${error.message}`);
+      }
+    }
+
+    setMembers((prev) =>
+      prev.map((member) => member.id === sanitizedMember.id ? sanitizedMember : member)
+    );
+
     if (isOwnRecord) {
       syncOwnProfileMetadata({
         displayName: sanitizedMember.name,
-        position: sanitizedMember.role,
+        position: sanitizedMember.position || sanitizedMember.role,
         division: sanitizedMember.division,
       });
-    }
-
-    if (isSupabaseConfigured) {
-      try {
-        // 1. Invoke secure field-specific RPC `update_own_member_profile`
-        await supabase.rpc('update_own_member_profile', {
-          p_member_id: sanitizedMember.id,
-          p_name: sanitizedMember.name,
-          p_role: sanitizedMember.role,
-          p_division: sanitizedMember.division,
-          p_nim: sanitizedMember.nim,
-          p_major: sanitizedMember.major,
-          p_faculty: sanitizedMember.faculty,
-          p_phone: sanitizedMember.phone,
-          p_emergency_contact: sanitizedMember.emergencyContact || '-',
-          p_bio: sanitizedMember.bio || '',
-          p_avatar_url: sanitizedMember.avatar,
-          p_avatar_storage_path: sanitizedMember.avatarStoragePath || null,
-          p_responsibilities: sanitizedMember.responsibilities || [],
-        });
-      } catch {
-        // Fallback to direct table update governed by RLS + trigger
-      }
-
-      try {
-        await supabase
-          .from('members')
-          .update({
-            name: sanitizedMember.name,
-            role: sanitizedMember.role,
-            position: sanitizedMember.role,
-            division: sanitizedMember.division,
-            nim: sanitizedMember.nim,
-            major: sanitizedMember.major,
-            faculty: sanitizedMember.faculty,
-            phone: sanitizedMember.phone,
-            emergency_contact: sanitizedMember.emergencyContact || '-',
-            bio: sanitizedMember.bio || '',
-            avatar: sanitizedMember.avatar,
-            avatar_url: sanitizedMember.avatar,
-            avatar_storage_path: sanitizedMember.avatarStoragePath || null,
-            responsibilities: sanitizedMember.responsibilities || [],
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', sanitizedMember.id);
-      } catch {
-        // Governed by RLS
-      }
     }
   };
 
