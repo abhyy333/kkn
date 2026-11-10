@@ -62,26 +62,8 @@ export function useDplAccountStatus(actorEmail?: string) {
       if (result) {
         setData(result as DplAccountStatusData);
       } else {
-        setData({
-          supervisor: {
-            id: OFFICIAL_DPL_MEMBER_ID,
-            name: DPL_SUPERVISOR.name,
-            nip: DPL_SUPERVISOR.nip,
-            title: DPL_SUPERVISOR.title,
-            position: DPL_SUPERVISOR.position,
-            faculty: DPL_SUPERVISOR.faculty,
-            study_program: DPL_SUPERVISOR.faculty,
-            division: 'DPL / Supervisi',
-            category: 'supervisor',
-          },
-          account: {
-            email_registered: false,
-            email: null,
-            activation_status: 'not_registered',
-            is_active: false,
-            role: null,
-          },
-        });
+        setData(null);
+        setError('Status akun DPL belum dapat diverifikasi dari Supabase. Coba muat ulang.');
       }
     } catch (err: any) {
       setError(err?.message || 'Gagal memuat status akun DPL.');
