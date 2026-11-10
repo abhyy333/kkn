@@ -104,6 +104,7 @@ function AppContent() {
   const {
     user,
     profile,
+    registeredEmails,
     isAdmin,
     isSuperAdmin,
     loading,
@@ -579,7 +580,7 @@ function AppContent() {
           () => {}
         );
     }
-  }, [user, profile]);
+  }, [user, profile, registeredEmails]);
 
   // Load workspace module data from localStorage + Supabase when authenticated
   useEffect(() => {
