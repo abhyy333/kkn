@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { OFFICIAL_PROJECT_ID, OFFICIAL_DPL_MEMBER_ID, DPL_SUPERVISOR } from '../data/mockData';
+import { OFFICIAL_PROJECT_ID } from '../data/mockData';
 
 export interface DplAccountStatusData {
   supervisor: {
