@@ -705,6 +705,14 @@ function AppContent() {
     }
   };
 
+  const handleUpdateUnitConfig = async (updatedConfig: UnitConfig) => {
+    await upsertWorkspaceRecord('unit_config', {
+      id: 'unit-config',
+      ...updatedConfig,
+    });
+    setUnitConfig(updatedConfig);
+  };
+
   const syncToSupabase = async (
     moduleKey: WorkspaceModuleKey,
     payload: Record<string, any>
@@ -1556,7 +1564,7 @@ function AppContent() {
                 announcements={announcements}
                 publicArticles={publicArticles}
                 unitConfig={unitConfig}
-                onUpdateUnitConfig={setUnitConfig}
+                onUpdateUnitConfig={handleUpdateUnitConfig}
                 onUpdateMember={handleUpdateMember}
                 onAddProgram={handleAddProgram}
                 onUpdateProgram={handleUpdateProgram}
@@ -1807,7 +1815,7 @@ function AppContent() {
               {currentModule === 'settings' && (
                 <SettingsView
                   config={unitConfig}
-                  onUpdateConfig={setUnitConfig}
+                  onUpdateConfig={handleUpdateUnitConfig}
                   onResetData={handleResetData}
                 />
               )}
