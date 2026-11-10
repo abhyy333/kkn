@@ -52,6 +52,7 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
   onRefreshData,
 }) => {
   const { dplStatus, isLoading: isDplStatusLoading } = useDplAccountStatus('abhyy333@gmail.com');
+  const dplActivationStatus = dplStatus?.account.activation_status || 'unknown';
   const [reviewLogs, setReviewLogs] = useState<DplReviewLogRecord[]>([]);
   const [selectedReport, setSelectedReport] = useState<ReportRecord | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -184,7 +185,15 @@ export const DplSupervisionAdminView: React.FC<DplSupervisionAdminViewProps> = (
               </div>
             ) : (
               <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1">
-                <span className="font-semibold block text-[11px]">{isDplStatusLoading ? 'Memuat status email DPL...' : dplStatus ? 'Status Email: Belum Didaftarkan' : 'Status Email: Tidak Tersedia'}</span>
+                <span className="font-semibold block text-[11px]">
+                  {isDplStatusLoading
+                    ? 'Memuat status email DPL...'
+                    : !dplStatus
+                      ? 'Status Email: Tidak Tersedia'
+                      : dplActivationStatus === 'disabled'
+                        ? 'Email DPL Dinonaktifkan'
+                        : 'Status Email: Belum Didaftarkan'}
+                </span>
                 {dplStatus && !dplStatus.account.email_registered && (
                   <button
                   onClick={() => {
