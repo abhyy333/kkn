@@ -23,6 +23,20 @@ function readKey(envName: string, legacyName?: string): string | null {
   return legacyName ? Deno.env.get(legacyName) ?? null : null;
 }
 
+function isAllowedOrigin(origin: string | null): boolean {
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(origin)) return true;
+  return (
+    /^https:\/\/kkn(-[a-z0-9-]+)?\.vercel\.app$/.test(origin) ||
+    /^https:\/\/kkn(-[a-z0-9-]+)-abhyy333s-projects\.vercel\.app$/.test(origin) ||
+    /^https:\/\/kkn(-[a-z0-9-]+)-abhyy333\.vercel\.app$/.test(origin) ||
+    /^https:\/\/kkn-space(-[a-z0-9-]+)?\.vercel\.app$/.test(origin) ||
+    /^https:\/\/kkn-space(-[a-z0-9-]+)-abhyy333s-projects\.vercel\.app$/.test(origin) ||
+    /^https:\/\/kkn-space(-[a-z0-9-]+)-abhyy333\.vercel\.app$/.test(origin)
+  );
+}
+
 function json(body: Record<string, unknown>, status: number, headers: Record<string, string>) {
   return new Response(JSON.stringify(body), { status, headers });
 }
@@ -35,7 +49,7 @@ function normalizeEmail(value: unknown): string | null {
 
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get("origin");
-  const allowedOrigin = origin && ALLOWED_ORIGINS.has(origin) ? origin : "https://kkn-beta.vercel.app";
+  const allowedOrigin = origin && isAllowedOrigin(origin) ? origin : "https://kkn-beta.vercel.app";
   const headers = {
     "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Headers": "authorization, apikey, x-client-info, content-type",
@@ -46,11 +60,11 @@ Deno.serve(async (req: Request) => {
   };
 
   if (req.method === "OPTIONS") {
-    if (origin && !ALLOWED_ORIGINS.has(origin)) return json({ error: "Origin not allowed" }, 403, headers);
+    if (origin && !isAllowedOrigin(origin)) return json({ error: "Origin not allowed" }, 403, headers);
     return new Response("ok", { status: 200, headers });
   }
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
-  if (origin && !ALLOWED_ORIGINS.has(origin)) return json({ error: "Origin not allowed" }, 403, headers);
+  if (origin && !isAllowedOrigin(origin)) return json({ error: "Origin not allowed" }, 403, headers);
 
   const authorization = req.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) {
