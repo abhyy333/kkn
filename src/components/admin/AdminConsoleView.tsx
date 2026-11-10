@@ -367,6 +367,15 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
   // Admin Accounts for privilege resolution
   const [adminAccounts, setAdminAccounts] = useState<any[]>([]);
 
+  // Database Diagnostics & Connection Monitoring State
+  const [dbConnStatus, setDbConnStatus] = useState<
+    'connected' | 'loading' | 'unauthorized' | 'permission_denied' | 'network_error' | 'database_error' | 'missing_config'
+  >('connected');
+  const [dbQueryDetail, setDbQueryDetail] = useState<string>('Terhubung & Valid (Supabase PostgreSQL)');
+  const [lastSyncTimestamp, setLastSyncTimestamp] = useState<string>(
+    () => new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA'
+  );
+
   // Email Reset State: "Hapus Email" (Remove)
   const [removeEmailTarget, setRemoveEmailTarget] = useState<(Member & { regRecord?: RegisteredEmailRecord }) | null>(null);
   const [removeConfirmName, setRemoveConfirmName] = useState('');
@@ -411,6 +420,36 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
     setConfigDraft(unitConfig);
   }, [unitConfig]);
 
+  const checkDatabaseHealth = async () => {
+    setDbConnStatus('loading');
+    try {
+      const { error } = await supabase.from('public_team_roster').select('id', { count: 'exact', head: true });
+      if (error) {
+        if (error.code === '42501') {
+          setDbConnStatus('permission_denied');
+          setDbQueryDetail(`Izin ditolak (42501): ${error.message}`);
+        } else {
+          setDbConnStatus('database_error');
+          setDbQueryDetail(`Database error (${error.code || 'unknown'}): ${error.message}`);
+        }
+      } else {
+        setDbConnStatus('connected');
+        setDbQueryDetail('Terhubung ke PostgreSQL Supabase (Roster & Auth Schema valid)');
+        setLastSyncTimestamp(
+          new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA'
+        );
+      }
+    } catch (err: any) {
+      if (err?.message?.includes('Failed to fetch') || err?.name === 'TypeError') {
+        setDbConnStatus('network_error');
+        setDbQueryDetail('Koneksi jaringan terputus (Network Error)');
+      } else {
+        setDbConnStatus('database_error');
+        setDbQueryDetail(err?.message || 'Gagal menghubungi database');
+      }
+    }
+  };
+
   // Load Registered Emails, Activity Logs & Admin Accounts
   const loadData = async () => {
     setIsLoadingEmails(true);
@@ -433,8 +472,11 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
           console.warn('admin_accounts fetch notice:', err);
         }
       }
-    } catch (err) {
+      await checkDatabaseHealth();
+    } catch (err: any) {
       console.warn('Admin console data load notice:', err);
+      setDbConnStatus('database_error');
+      setDbQueryDetail(err?.message || 'Gagal memuat data administrasi');
     } finally {
       setIsLoadingEmails(false);
       setIsLoadingLogs(false);
@@ -4861,24 +4903,116 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
          ===================================================================== */}
       {activeTab === 'database' && (
         <div className="space-y-6">
+          {/* Live Diagnostic & Health Monitoring Panel */}
           <div className="p-5 rounded-lg bg-white border border-[#E8E6DF] space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-100 pb-3">
               <div>
-                <h2 className="text-sm font-semibold text-stone-900">
-                  Infrastruktur Database & Keamanan RLS
+                <h2 className="text-sm font-semibold text-stone-900 flex items-center gap-2">
+                  <span>Status Koneksi & Diagnostik Supabase</span>
+                  <span
+                    className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${
+                      dbConnStatus === 'connected'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : dbConnStatus === 'loading'
+                        ? 'bg-amber-50 text-amber-700 border border-amber-200 animate-pulse'
+                        : dbConnStatus === 'permission_denied'
+                        ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                        : 'bg-red-50 text-red-700 border border-red-200'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
+                        dbConnStatus === 'connected'
+                          ? 'bg-emerald-500'
+                          : dbConnStatus === 'loading'
+                          ? 'bg-amber-500'
+                          : 'bg-red-500'
+                      }`}
+                    />
+                    {dbConnStatus === 'connected'
+                      ? 'Connected'
+                      : dbConnStatus === 'loading'
+                      ? 'Loading...'
+                      : dbConnStatus === 'permission_denied'
+                      ? 'Permission Denied'
+                      : dbConnStatus === 'network_error'
+                      ? 'Network Error'
+                      : dbConnStatus === 'unauthorized'
+                      ? 'Unauthorized'
+                      : 'Database Error'}
+                  </span>
                 </h2>
-                <p className="text-xs text-stone-500">
-                  Supabase Project: <code className="font-mono">scslevzuxxkfcuvwbtty</code>
+                <p className="text-xs text-stone-500 mt-0.5">
+                  Single Source of Truth: PostgreSQL Database & Real-time Auth Engine
                 </p>
               </div>
-              <button
-                onClick={handleExportDatabaseSnapshot}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#4A6B53] text-white text-xs font-medium hover:bg-[#3d5944]"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Ekspor Snapshot JSON</span>
-              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={checkDatabaseHealth}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[#E8E6DF] hover:bg-stone-50 text-stone-700 text-xs font-medium transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${dbConnStatus === 'loading' ? 'animate-spin' : ''}`} />
+                  <span>Uji Koneksi & Sinkronisasi</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportDatabaseSnapshot}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#4A6B53] text-white text-xs font-medium hover:bg-[#3d5944]"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Ekspor Snapshot JSON</span>
+                </button>
+              </div>
             </div>
+
+            {/* Diagnostic Metrics Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="p-3.5 rounded-md bg-[#FAF9F5] border border-[#E8E6DF]">
+                <div className="text-[11px] font-medium text-stone-500">Project Reference</div>
+                <div className="text-sm font-bold font-mono text-stone-900 mt-1">scslevzuxxkfcuvwbtty</div>
+                <div className="text-[10px] text-stone-400 mt-0.5">UUID: f5dcc382-8cc9-465a-b919-e58d6a688eea</div>
+              </div>
+
+              <div className="p-3.5 rounded-md bg-[#FAF9F5] border border-[#E8E6DF]">
+                <div className="text-[11px] font-medium text-stone-500">Jumlah Anggota Database</div>
+                <div className="text-sm font-bold text-stone-900 mt-1">
+                  {enrichedMembers.length} Orang
+                </div>
+                <div className="text-[10px] text-stone-500 mt-0.5">10 Mahasiswa KKN + 1 DPL</div>
+              </div>
+
+              <div className="p-3.5 rounded-md bg-[#FAF9F5] border border-[#E8E6DF]">
+                <div className="text-[11px] font-medium text-stone-500">Akun Auth Terhubung</div>
+                <div className="text-sm font-bold text-emerald-700 mt-1">
+                  {enrichedMembers.filter((m) => m.accountStatus === 'active' || m.authUid).length} Akun Aktif
+                </div>
+                <div className="text-[10px] text-stone-500 mt-0.5">Terautentikasi Supabase Auth</div>
+              </div>
+
+              <div className="p-3.5 rounded-md bg-[#FAF9F5] border border-[#E8E6DF]">
+                <div className="text-[11px] font-medium text-stone-500">Email Menunggu Aktivasi</div>
+                <div className="text-sm font-bold text-amber-700 mt-1">
+                  {registeredEmails.filter((r) => r.status === 'pending_activation').length} Email
+                </div>
+                <div className="text-[10px] text-stone-500 mt-0.5">Menunggu pendaftaran password</div>
+              </div>
+            </div>
+
+            {/* Status Query & Sinkronisasi Terakhir */}
+            <div className="p-3 rounded-md bg-stone-50 border border-stone-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Database className="w-4 h-4 text-stone-600 shrink-0" />
+                <span className="text-stone-700 font-medium">Status Query:</span>
+                <span className="text-stone-600 font-mono text-[11px]">{dbQueryDetail}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-stone-500 text-[11px]">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Sinkronisasi Terakhir: {lastSyncTimestamp}</span>
+              </div>
+            </div>
+          </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
               <div className="p-4 rounded-md bg-[#FAF9F5] border border-[#E8E6DF] space-y-2">
@@ -4924,7 +5058,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                     Menjaga riwayat rapat, tugas, keputusan, dan survei ketika akun Auth dihapus.
                   </li>
                 </ul>
-              </div>
             </div>
           </div>
         </div>

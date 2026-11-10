@@ -155,9 +155,6 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const SUPER_ADMIN_EMAIL = 'abhyy333@gmail.com';
-const PROFILE_STORAGE_KEY = 'kkn_space_Authoritative_Profile_v2';
-const REGISTERED_EMAILS_STORAGE_KEY = 'kkn_space_registered_emails_v1';
-const ADMIN_LOGS_STORAGE_KEY = 'kkn_space_admin_logs_v1';
 
 // In-memory deduplication & session-scoped cache to prevent duplicate database queries
 const inflightProfileRequests = new Map<string, Promise<UserProfile | null>>();
@@ -249,17 +246,6 @@ function saveCachedProfile(uid: string, profile: UserProfile) {
   if (profile.email) {
     memoryProfileCache.set(profile.email.toLowerCase(), profile);
   }
-  try {
-    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
-    const cache = raw ? JSON.parse(raw) : {};
-    cache[uid] = profile;
-    if (profile.email) {
-      cache[profile.email.toLowerCase()] = profile;
-    }
-    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(cache));
-  } catch (e) {
-    console.warn('Could not save profile to localStorage:', e);
-  }
 }
 
 function getCachedProfile(uid: string, email?: string | null): UserProfile | null {
@@ -269,62 +255,12 @@ function getCachedProfile(uid: string, email?: string | null): UserProfile | nul
   if (email && memoryProfileCache.has(email.toLowerCase())) {
     return memoryProfileCache.get(email.toLowerCase()) || null;
   }
-  try {
-    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
-    if (!raw) return null;
-    const cache = JSON.parse(raw);
-    if (cache[uid]) {
-      memoryProfileCache.set(uid, cache[uid]);
-      return cache[uid];
-    }
-    if (email && cache[email.toLowerCase()]) {
-      const found = cache[email.toLowerCase()];
-      memoryProfileCache.set(uid, found);
-      return found;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function clearCachedProfile() {
   memoryProfileCache.clear();
   inflightProfileRequests.clear();
-  try {
-    localStorage.removeItem(PROFILE_STORAGE_KEY);
-  } catch {
-    // Ignore storage error
-  }
-}
-
-function getLocalRegisteredEmails(): RegisteredEmailRecord[] {
-  try {
-    const raw = localStorage.getItem(REGISTERED_EMAILS_STORAGE_KEY);
-    if (!raw) return INITIAL_REGISTERED_EMAILS;
-    const parsed = JSON.parse(raw) as RegisteredEmailRecord[];
-    const mergedMap = new Map<string, RegisteredEmailRecord>();
-    INITIAL_REGISTERED_EMAILS.forEach((item) =>
-      mergedMap.set(item.email.toLowerCase(), item)
-    );
-    if (Array.isArray(parsed)) {
-      parsed.forEach((item) => {
-        if (!item || !item.email || isFabricatedLegacyRecord(item)) return;
-        mergedMap.set(item.email.toLowerCase(), toAppRegisteredEmailRecord(item));
-      });
-    }
-    return Array.from(mergedMap.values());
-  } catch {
-    return INITIAL_REGISTERED_EMAILS;
-  }
-}
-
-function saveLocalRegisteredEmails(list: RegisteredEmailRecord[]) {
-  try {
-    localStorage.setItem(REGISTERED_EMAILS_STORAGE_KEY, JSON.stringify(list));
-  } catch (e) {
-    console.warn('Could not save registered emails locally:', e);
-  }
 }
 
 function mapSupabaseUserToAppUser(
@@ -377,17 +313,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     detectUrlRecoveryContext
   );
   const [activeMode, setActiveMode] = useState<ActiveWorkspaceMode>('workspace');
-  const [registeredEmails, setRegisteredEmails] = useState<RegisteredEmailRecord[]>(
-    getLocalRegisteredEmails
-  );
-  const [adminLogs, setAdminLogs] = useState<AdminActivityLog[]>(() => {
-    try {
-      const raw = localStorage.getItem(ADMIN_LOGS_STORAGE_KEY);
-      return raw ? JSON.parse(raw) : INITIAL_ADMIN_LOGS;
-    } catch {
-      return INITIAL_ADMIN_LOGS;
-    }
-  });
+  const [registeredEmails, setRegisteredEmails] = useState<RegisteredEmailRecord[]>([]);
+  const [adminLogs, setAdminLogs] = useState<AdminActivityLog[]>([]);
 
   // Track whether the user had an active session in this lifecycle to detect unexpected session expiration
   const hadActiveSessionRef = useRef(false);
@@ -402,119 +329,57 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const fetchRegisteredEmails = async (): Promise<RegisteredEmailRecord[]> => {
-    let finalEmails: RegisteredEmailRecord[] = [];
-
-    if (isSupabaseConfigured) {
-      try {
-        const { data: sbRows, error: sbErr } = await supabase
-          .from('registered_emails')
-          .select('*');
-
-        if (!sbErr && Array.isArray(sbRows)) {
-          finalEmails = sbRows
-            .filter((row) => !isFabricatedLegacyRecord(row))
-            .map((row) => toAppRegisteredEmailRecord(row))
-            .filter((rec) => Boolean(rec.email));
-
-          setRegisteredEmails(finalEmails);
-          saveLocalRegisteredEmails(finalEmails);
-          return finalEmails;
-        }
-      } catch (err) {
-        console.warn('Supabase registered_emails fetch notice:', err);
-      }
-    }
-
-    // Fallback if Supabase is not configured or failed
-    const mergedMap = new Map<string, RegisteredEmailRecord>();
-    getLocalRegisteredEmails().forEach((item) => {
-      if (!isFabricatedLegacyRecord(item)) {
-        mergedMap.set(item.email.toLowerCase(), item);
-      }
-    });
-
     try {
-      const res = await fetch('/api/admin/registered-emails');
-      if (res.ok) {
-        const data = await res.json();
-        const list = data.emails || data.registeredEmails || [];
-        if (Array.isArray(list) && list.length > 0) {
-          list.forEach((item: any) => {
-            if (isFabricatedLegacyRecord(item)) return;
-            const mapped = toAppRegisteredEmailRecord(item);
-            if (mapped.email) {
-              const key = mapped.email.toLowerCase();
-              mergedMap.set(key, mapped);
-            }
-          });
-        }
-      }
-    } catch {
-      // Fallback to local
-    }
+      const { data: sbRows, error: sbErr } = await supabase
+        .from('registered_emails')
+        .select('*');
 
-    finalEmails = Array.from(mergedMap.values()).filter(
-      (r) => !isFabricatedLegacyRecord(r)
-    );
-    setRegisteredEmails(finalEmails);
-    saveLocalRegisteredEmails(finalEmails);
-    return finalEmails;
+      if (!sbErr && Array.isArray(sbRows)) {
+        const finalEmails = sbRows
+          .filter((row) => !isFabricatedLegacyRecord(row))
+          .map((row) => toAppRegisteredEmailRecord(row))
+          .filter((rec) => Boolean(rec.email));
+
+        setRegisteredEmails(finalEmails);
+        return finalEmails;
+      }
+    } catch (err) {
+      console.warn('Supabase registered_emails fetch notice:', err);
+    }
+    return [];
   };
 
   const fetchActivityLogs = async (): Promise<AdminActivityLogRecord[]> => {
-    let combined = [...adminLogs];
-    if (isSupabaseConfigured) {
-      try {
-        const { data: sbLogs, error: sbLogErr } = await supabase
-          .from('admin_activity_logs')
-          .select('*')
-          .order('timestamp', { ascending: false })
-          .limit(200);
-        if (!sbLogErr && Array.isArray(sbLogs) && sbLogs.length > 0) {
-          const mappedSbLogs: AdminActivityLog[] = sbLogs.map((l: any) => ({
-            id: String(l.id),
-            timestamp: String(l.timestamp || l.created_at || new Date().toISOString()),
-            adminEmail: String(l.admin_email || l.adminEmail || SUPER_ADMIN_EMAIL),
-            adminName: String(l.admin_name || l.adminName || 'Super Admin'),
-            actorEmail: String(l.admin_email || l.adminEmail || SUPER_ADMIN_EMAIL),
-            actorName: String(l.admin_name || l.adminName || 'Super Admin'),
-            action: (l.action || 'SYSTEM_SETTING_CHANGED') as AdminActivityLogRecord['action'],
-            target: String(l.target || '-'),
-            details: String(l.details || ''),
-            status: (l.status === 'warning' || l.status === 'error' ? l.status : 'success') as
-              | 'success'
-              | 'warning'
-              | 'error',
-            ip: l.ip,
-          }));
-          const logMap = new Map<string, AdminActivityLog>();
-          [...mappedSbLogs, ...combined].forEach((item) => logMap.set(item.id, item));
-          combined = Array.from(logMap.values());
-        }
-      } catch {
-        // Optional table
-      }
-    }
-
     try {
-      const logsRes = await fetch('/api/admin/activity-logs');
-      if (logsRes.ok) {
-        const logsData = await logsRes.json();
-        const list = logsData.logs || [];
-        if (Array.isArray(list) && list.length > 0) {
-          const logMap = new Map<string, AdminActivityLog>();
-          [...combined, ...list].forEach((item: any) => logMap.set(item.id, item));
-          combined = Array.from(logMap.values());
-        }
+      const { data: sbLogs, error: sbLogErr } = await supabase
+        .from('admin_activity_logs')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(200);
+      if (!sbLogErr && Array.isArray(sbLogs)) {
+        const mappedSbLogs: AdminActivityLog[] = sbLogs.map((l: any) => ({
+          id: String(l.id),
+          timestamp: String(l.timestamp || l.created_at || new Date().toISOString()),
+          adminEmail: String(l.admin_email || l.adminEmail || SUPER_ADMIN_EMAIL),
+          adminName: String(l.admin_name || l.adminName || 'Super Admin'),
+          actorEmail: String(l.admin_email || l.adminEmail || SUPER_ADMIN_EMAIL),
+          actorName: String(l.admin_name || l.adminName || 'Super Admin'),
+          action: (l.action || 'SYSTEM_SETTING_CHANGED') as AdminActivityLogRecord['action'],
+          target: String(l.target || '-'),
+          details: String(l.details || ''),
+          status: (l.status === 'warning' || l.status === 'error' ? l.status : 'success') as
+            | 'success'
+            | 'warning'
+            | 'error',
+          ip: l.ip,
+        }));
+        setAdminLogs(mappedSbLogs);
+        return mappedSbLogs;
       }
-    } catch {
-      // Fallback to local logs
+    } catch (err) {
+      console.warn('Supabase activity logs fetch notice:', err);
     }
-
-    combined.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-    setAdminLogs(combined);
-    localStorage.setItem(ADMIN_LOGS_STORAGE_KEY, JSON.stringify(combined));
-    return combined;
+    return [];
   };
 
   /**
@@ -621,17 +486,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // 3. Fallback to local store for offline/demo if available
-    const localList = getLocalRegisteredEmails();
-    const localFound = localList.find(
-      (item) => item.email.toLowerCase() === cleanEmail && !isFabricatedLegacyRecord(item)
-    );
-    if (localFound) {
-      return localFound.status === 'revoked' || localFound.status === 'disabled'
-        ? null
-        : localFound;
-    }
-
     return null;
   };
 
@@ -692,11 +546,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const regRecord =
           authRow && !isFabricatedLegacyRecord(authRow)
             ? toAppRegisteredEmailRecord(authRow)
-            : getLocalRegisteredEmails().find(
-                (r) =>
-                  r.email.toLowerCase() === cleanEmail &&
-                  !isFabricatedLegacyRecord(r)
-              ) || null;
+            : null;
 
         if (regRecord?.status === 'revoked' || regRecord?.status === 'disabled') {
           return null;
@@ -855,7 +705,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             r.email.toLowerCase() === cleanEmail ? updatedRecord : r
           )
         : [updatedRecord, ...prev];
-      saveLocalRegisteredEmails(next);
       return next;
     });
   };
@@ -1416,7 +1265,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const nextLogs = [newLog, ...adminLogs];
     setAdminLogs(nextLogs);
-    localStorage.setItem(ADMIN_LOGS_STORAGE_KEY, JSON.stringify(nextLogs));
 
     if (isSupabaseConfigured) {
       try {
@@ -1503,7 +1351,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       ...registeredEmails.filter((r) => r.email.toLowerCase() !== cleanEmail),
     ];
     setRegisteredEmails(updated);
-    saveLocalRegisteredEmails(updated);
 
     try {
       await fetch('/api/admin/register-member', {
@@ -1607,7 +1454,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         : r
     );
     setRegisteredEmails(updatedList);
-    saveLocalRegisteredEmails(updatedList);
 
     await logAdminActivity(
       'UPDATE_REGISTERED_EMAIL',
@@ -1756,7 +1602,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         : r
     );
     setRegisteredEmails(updatedList);
-    saveLocalRegisteredEmails(updatedList);
 
     await logAdminActivity(
       'DISABLE_ACCOUNT',
@@ -1865,7 +1710,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         : r
     );
     setRegisteredEmails(updatedList);
-    saveLocalRegisteredEmails(updatedList);
 
     await logAdminActivity(
       'RESTORE_ACCOUNT',
@@ -1970,7 +1814,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         (!targetMemberId || r.memberId !== targetMemberId)
     );
     setRegisteredEmails(updatedList);
-    saveLocalRegisteredEmails(updatedList);
 
     await logAdminActivity(
       'DELETE_AUTH_ACCOUNT',
@@ -2102,7 +1945,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               }
             : r
         );
-        saveLocalRegisteredEmails(next);
         return next;
       });
     }

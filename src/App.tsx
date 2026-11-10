@@ -355,44 +355,7 @@ function AppContent() {
       // 1. Base team structure
       INITIAL_MEMBERS.forEach((m) => memberMap.set(m.id, { ...m }));
 
-      // 2. Local persisted member updates (only merge valid non-fabricated fields onto known members)
-      try {
-        const rawLocal = localStorage.getItem('kkn_space_members_v1');
-        if (rawLocal) {
-          const parsedLocal = JSON.parse(rawLocal) as Member[];
-          if (Array.isArray(parsedLocal)) {
-            parsedLocal.forEach((m) => {
-              if (!m || !m.id || isFabricatedLegacyRecord(m)) return;
-              const existing = memberMap.get(m.id);
-              if (existing) {
-                const validEmail =
-                  m.email && !isFabricatedLegacyRecord({ email: m.email }) ? m.email : existing.email;
-                memberMap.set(m.id, {
-                  ...existing,
-                  name: m.name || existing.name,
-                  role: m.role || existing.role,
-                  division: m.division || existing.division,
-                  nim: m.nim || existing.nim,
-                  major: m.major || existing.major,
-                  faculty: m.faculty || existing.faculty,
-                  phone: m.phone || existing.phone,
-                  bio: m.bio || existing.bio,
-                  email: validEmail,
-                  registeredEmail: validEmail || undefined,
-                  avatar: m.avatar || existing.avatar,
-                  avatarStoragePath: m.avatarStoragePath || existing.avatarStoragePath,
-                  accountStatus: m.accountStatus || existing.accountStatus,
-                  responsibilities: Array.isArray(m.responsibilities)
-                    ? m.responsibilities
-                    : existing.responsibilities,
-                });
-              }
-            });
-          }
-        }
-      } catch {
-        // Ignore storage error
-      }
+      // 2. Authoritative Supabase records populate and overlay the structure
 
       // 3. Direct Supabase 'members' table records (map snake_case/camelCase onto existing KKN members safely)
       sbMembers.forEach((rawM: any) => {
@@ -461,22 +424,8 @@ function AppContent() {
         }
       });
 
-      // 4. Authoritative Registered Emails overlay from Supabase + local verified registry
-      let localRegs: any[] = [];
-      try {
-        const rawReg = localStorage.getItem('kkn_space_registered_emails_v1');
-        if (rawReg) {
-          const parsedReg = JSON.parse(rawReg);
-          if (Array.isArray(parsedReg)) {
-            localRegs = parsedReg.filter((r) => !isFabricatedLegacyRecord(r));
-          }
-        }
-      } catch {}
-
-      const allVerifiedRegs =
-        sbRegisteredEmails.length > 0
-          ? sbRegisteredEmails.filter((r) => !isFabricatedLegacyRecord(r))
-          : localRegs;
+      // 4. Authoritative Registered Emails overlay directly from Supabase
+      const allVerifiedRegs = sbRegisteredEmails.filter((r) => !isFabricatedLegacyRecord(r));
       allVerifiedRegs.forEach((reg) => {
         if (!reg || typeof reg !== 'object') return;
         const regEmail = String(reg.email || '').trim().toLowerCase();
@@ -640,7 +589,7 @@ function AppContent() {
     }
   }, [user, profile]);
 
-  // Load workspace module data from localStorage + Supabase when authenticated
+  // Load workspace module data directly from Supabase when authenticated
   useEffect(() => {
     const normalizeTask = (t: any): TaskItem | null => {
       if (!t || !t.id || !t.title) return null;
@@ -704,52 +653,6 @@ function AppContent() {
         status: m.status === 'completed' ? 'completed' : 'upcoming',
       };
     };
-
-    try {
-      const savedTasks = localStorage.getItem('kkn_space_tasks_v1');
-      if (savedTasks) {
-        const parsed = JSON.parse(savedTasks);
-        if (Array.isArray(parsed)) {
-          const valid = parsed.map(normalizeTask).filter(Boolean) as TaskItem[];
-          if (valid.length > 0) setTasks(valid);
-        }
-      }
-      const savedMeetings = localStorage.getItem('kkn_space_meetings_v1');
-      if (savedMeetings) {
-        const parsed = JSON.parse(savedMeetings);
-        if (Array.isArray(parsed)) {
-          const valid = parsed.map(normalizeMeeting).filter(Boolean) as MeetingItem[];
-          if (valid.length > 0) setMeetings(valid);
-        }
-      }
-      const savedDecisions = localStorage.getItem('kkn_space_decisions_v1');
-      if (savedDecisions) {
-        const parsed = JSON.parse(savedDecisions);
-        if (Array.isArray(parsed) && parsed.length > 0) setDecisions(parsed);
-      }
-      const savedVillage = localStorage.getItem('kkn_space_village_research_v1');
-      if (savedVillage) {
-        const parsed = JSON.parse(savedVillage);
-        if (parsed && Array.isArray(parsed.dusuns)) setVillageResearch(parsed);
-      }
-      const savedSurveys = localStorage.getItem('kkn_space_surveys_v1');
-      if (savedSurveys) {
-        const parsed = JSON.parse(savedSurveys);
-        if (Array.isArray(parsed) && parsed.length > 0) setSurveys(parsed);
-      }
-      const savedDocs = localStorage.getItem('kkn_space_documentation_v1');
-      if (savedDocs) {
-        const parsed = JSON.parse(savedDocs);
-        if (Array.isArray(parsed) && parsed.length > 0) setDocumentation(parsed);
-      }
-      const savedAlbums = localStorage.getItem('kkn_space_documentation_albums_v1');
-      if (savedAlbums) {
-        const parsed = JSON.parse(savedAlbums);
-        if (Array.isArray(parsed) && parsed.length > 0) setDocumentationAlbums(parsed);
-      }
-    } catch {
-      // Ignore storage error
-    }
 
     if (!user || !isSupabaseConfigured) return;
 
@@ -833,9 +736,6 @@ function AppContent() {
 
   const handleSaveDocumentationAlbums = async (nextAlbums: DocumentationAlbum[]) => {
     setDocumentationAlbums(nextAlbums);
-    try {
-      localStorage.setItem('kkn_space_documentation_albums_v1', JSON.stringify(nextAlbums));
-    } catch {}
 
     if (isSupabaseConfigured) {
       for (const alb of nextAlbums) {
@@ -1093,13 +993,9 @@ function AppContent() {
 
     setMembers((prev) => {
       const exists = prev.some((m) => m.id === sanitizedMember.id);
-      const next = exists
+      return exists
         ? prev.map((m) => (m.id === sanitizedMember.id ? sanitizedMember : m))
         : [...prev, sanitizedMember];
-      try {
-        localStorage.setItem('kkn_space_members_v1', JSON.stringify(next));
-      } catch {}
-      return next;
     });
 
     // If the authenticated user updated their own record, sync display metadata to AuthContext & session cache
@@ -1177,28 +1073,16 @@ function AppContent() {
     await deleteFromSupabase('programs', programId);
   };
 
-  // Meetings Supabase + Local CRUD
+  // Meetings Supabase CRUD
   const handleAddMeeting = async (newMeeting: MeetingItem) => {
-    setMeetings((prev) => {
-      const next = [newMeeting, ...prev];
-      try {
-        localStorage.setItem('kkn_space_meetings_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setMeetings((prev) => [newMeeting, ...prev]);
     await syncToSupabase('meetings', newMeeting);
   };
 
   const handleUpdateMeeting = async (updatedMeeting: MeetingItem) => {
-    setMeetings((prev) => {
-      const next = prev.map((m) =>
-        m.id === updatedMeeting.id ? updatedMeeting : m
-      );
-      try {
-        localStorage.setItem('kkn_space_meetings_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setMeetings((prev) =>
+      prev.map((m) => (m.id === updatedMeeting.id ? updatedMeeting : m))
+    );
     await syncToSupabase('meetings', updatedMeeting);
   };
 
@@ -1214,13 +1098,7 @@ function AppContent() {
     });
     if (!ok) return;
 
-    setMeetings((prev) => {
-      const next = prev.filter((m) => m.id !== meetingId);
-      try {
-        localStorage.setItem('kkn_space_meetings_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setMeetings((prev) => prev.filter((m) => m.id !== meetingId));
     await deleteFromSupabase('meetings', meetingId);
     appNotify({
       type: 'success',
@@ -1242,28 +1120,16 @@ function AppContent() {
     await handleUpdateMeeting(updatedMeeting);
   };
 
-  // Tasks Supabase + Local CRUD
+  // Tasks Supabase CRUD
   const handleAddTask = async (newTask: TaskItem) => {
-    setTasks((prev) => {
-      const next = [newTask, ...prev];
-      try {
-        localStorage.setItem('kkn_space_tasks_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setTasks((prev) => [newTask, ...prev]);
     await syncToSupabase('tasks', newTask);
   };
 
   const handleUpdateTask = async (updatedTask: TaskItem) => {
-    setTasks((prev) => {
-      const next = prev.map((t) =>
-        t.id === updatedTask.id ? updatedTask : t
-      );
-      try {
-        localStorage.setItem('kkn_space_tasks_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setTasks((prev) =>
+      prev.map((t) => (t.id === updatedTask.id ? updatedTask : t))
+    );
     await syncToSupabase('tasks', updatedTask);
   };
 
@@ -1279,13 +1145,7 @@ function AppContent() {
     });
     if (!ok) return;
 
-    setTasks((prev) => {
-      const next = prev.filter((t) => t.id !== taskId);
-      try {
-        localStorage.setItem('kkn_space_tasks_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setTasks((prev) => prev.filter((t) => t.id !== taskId));
     await deleteFromSupabase('tasks', taskId);
     appNotify({
       type: 'success',
@@ -1311,28 +1171,16 @@ function AppContent() {
     await handleUpdateTask({ ...task, status: newStatus });
   };
 
-  // Decisions Supabase + Local CRUD
+  // Decisions Supabase CRUD
   const handleAddDecision = async (newDecision: DecisionLogRecord) => {
-    setDecisions((prev) => {
-      const next = [newDecision, ...prev];
-      try {
-        localStorage.setItem('kkn_space_decisions_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setDecisions((prev) => [newDecision, ...prev]);
     await syncToSupabase('decisions', newDecision);
   };
 
   const handleUpdateDecision = async (updatedDecision: DecisionLogRecord) => {
-    setDecisions((prev) => {
-      const next = prev.map((d) =>
-        d.id === updatedDecision.id ? updatedDecision : d
-      );
-      try {
-        localStorage.setItem('kkn_space_decisions_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setDecisions((prev) =>
+      prev.map((d) => (d.id === updatedDecision.id ? updatedDecision : d))
+    );
     await syncToSupabase('decisions', updatedDecision);
   };
 
@@ -1348,13 +1196,7 @@ function AppContent() {
     });
     if (!ok) return;
 
-    setDecisions((prev) => {
-      const next = prev.filter((d) => d.id !== decisionId);
-      try {
-        localStorage.setItem('kkn_space_decisions_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setDecisions((prev) => prev.filter((d) => d.id !== decisionId));
     await deleteFromSupabase('decisions', decisionId);
     appNotify({
       type: 'success',
@@ -1363,45 +1205,27 @@ function AppContent() {
     });
   };
 
-  // Village Research Supabase + Local CRUD
+  // Village Research Supabase CRUD
   const handleUpdateVillageResearch = async (
     updatedData: VillageResearchData
   ) => {
     setVillageResearch(updatedData);
-    try {
-      localStorage.setItem(
-        'kkn_space_village_research_v1',
-        JSON.stringify(updatedData)
-      );
-    } catch {}
     await syncToSupabase('village_research', {
       id: 'pringgasela-selatan',
       ...updatedData,
     });
   };
 
-  // Surveys Supabase + Local CRUD
+  // Surveys Supabase CRUD
   const handleAddSurvey = async (newSurvey: SurveyRecord) => {
-    setSurveys((prev) => {
-      const next = [newSurvey, ...prev];
-      try {
-        localStorage.setItem('kkn_space_surveys_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setSurveys((prev) => [newSurvey, ...prev]);
     await syncToSupabase('surveys', newSurvey);
   };
 
   const handleUpdateSurvey = async (updatedSurvey: SurveyRecord) => {
-    setSurveys((prev) => {
-      const next = prev.map((s) =>
-        s.id === updatedSurvey.id ? updatedSurvey : s
-      );
-      try {
-        localStorage.setItem('kkn_space_surveys_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setSurveys((prev) =>
+      prev.map((s) => (s.id === updatedSurvey.id ? updatedSurvey : s))
+    );
     await syncToSupabase('surveys', updatedSurvey);
   };
 
@@ -1417,13 +1241,7 @@ function AppContent() {
     });
     if (!ok) return;
 
-    setSurveys((prev) => {
-      const next = prev.filter((s) => s.id !== surveyId);
-      try {
-        localStorage.setItem('kkn_space_surveys_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+    setSurveys((prev) => prev.filter((s) => s.id !== surveyId));
     await deleteFromSupabase('surveys', surveyId);
     appNotify({
       type: 'success',
@@ -1432,34 +1250,16 @@ function AppContent() {
     });
   };
 
-  // Documentation Supabase + Local CRUD
+  // Documentation Supabase CRUD
   const handleAddPhoto = async (newPhoto: DocumentationPhoto) => {
-    setDocumentation((prev) => {
-      const next = [newPhoto, ...prev];
-      try {
-        localStorage.setItem(
-          'kkn_space_documentation_v1',
-          JSON.stringify(next)
-        );
-      } catch {}
-      return next;
-    });
+    setDocumentation((prev) => [newPhoto, ...prev]);
     await syncToSupabase('documentation', newPhoto);
   };
 
   const handleUpdatePhoto = async (updatedPhoto: DocumentationPhoto) => {
-    setDocumentation((prev) => {
-      const next = prev.map((p) =>
-        p.id === updatedPhoto.id ? updatedPhoto : p
-      );
-      try {
-        localStorage.setItem(
-          'kkn_space_documentation_v1',
-          JSON.stringify(next)
-        );
-      } catch {}
-      return next;
-    });
+    setDocumentation((prev) =>
+      prev.map((p) => (p.id === updatedPhoto.id ? updatedPhoto : p))
+    );
     await syncToSupabase('documentation', updatedPhoto);
   };
 
@@ -1474,16 +1274,7 @@ function AppContent() {
     });
     if (!ok) return;
 
-    setDocumentation((prev) => {
-      const next = prev.filter((p) => p.id !== photoId);
-      try {
-        localStorage.setItem(
-          'kkn_space_documentation_v1',
-          JSON.stringify(next)
-        );
-      } catch {}
-      return next;
-    });
+    setDocumentation((prev) => prev.filter((p) => p.id !== photoId));
     await deleteFromSupabase('documentation', photoId);
   };
 

@@ -14,22 +14,21 @@ const getEnvVar = (key: string): string => {
   return '';
 };
 
+export const OFFICIAL_SUPABASE_PROJECT_REF = 'scslevzuxxkfcuvwbtty';
+export const OFFICIAL_SUPABASE_PROJECT_ID = 'f5dcc382-8cc9-465a-b919-e58d6a688eea';
+const OFFICIAL_SUPABASE_URL = 'https://scslevzuxxkfcuvwbtty.supabase.co';
+const OFFICIAL_SUPABASE_ANON_KEY = 'sb_publishable_fXxxzOqigIDVVLL-AY-Spw_kUbJVJNx';
+
 const rawSupabaseUrl = getEnvVar('VITE_SUPABASE_URL');
 const rawSupabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
 
-export const isSupabaseConfigured = Boolean(
-  rawSupabaseUrl &&
-    rawSupabaseAnonKey &&
-    rawSupabaseUrl.startsWith('http')
-);
-
-// Use placeholder values only if env vars are not set yet so the client initializes without throwing at import time
-const effectiveUrl = isSupabaseConfigured
+export const effectiveUrl = (rawSupabaseUrl && rawSupabaseUrl.startsWith('http'))
   ? rawSupabaseUrl
-  : 'https://placeholder-project.supabase.co';
-const effectiveAnonKey = isSupabaseConfigured
-  ? rawSupabaseAnonKey
-  : 'placeholder-anon-key';
+  : OFFICIAL_SUPABASE_URL;
+
+export const effectiveAnonKey = rawSupabaseAnonKey || OFFICIAL_SUPABASE_ANON_KEY;
+
+export const isSupabaseConfigured = true;
 
 export const supabase: SupabaseClient = createClient(
   effectiveUrl,
@@ -40,7 +39,7 @@ export const supabase: SupabaseClient = createClient(
       autoRefreshToken: true,
       detectSessionInUrl: true,
       storageKey: 'kkn_space_supabase_auth',
-      storage: typeof window !== 'undefined' ? window.localStorage : undefined,
+      storage: typeof window !== 'undefined' ? window.sessionStorage : undefined,
     },
   }
 );
