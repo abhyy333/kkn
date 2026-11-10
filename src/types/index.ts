@@ -62,6 +62,8 @@ export interface RegisteredEmailRecord {
   status: 'pending_activation' | 'activated' | 'revoked' | 'disabled';
   activatedAt?: any;
   activatedUid?: string;
+  /** True when the Auth account exists but its first email verification is still pending. */
+  confirmationPending?: boolean;
   disabledAt?: string;
   disabledReason?: string;
 }
