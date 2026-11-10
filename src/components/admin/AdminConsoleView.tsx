@@ -581,16 +581,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
       // Refetch fresh database state
       await loadData();
 
-      // Update parent state
-      await onUpdateMember({
-        ...removeEmailTarget,
-        email: '',
-        registeredEmail: undefined,
-        authUid: undefined,
-        accountStatus: 'pending',
-        acceptedAt: undefined,
-      });
-
       await logAdminActivity(
         'REMOVE_MEMBER_EMAIL',
         `${removeEmailTarget.name} (${removeEmailTarget.id})`,
@@ -710,15 +700,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
       await loadData();
 
       // Update parent state
-      await onUpdateMember({
-        ...replaceEmailTarget,
-        email: cleanNewEmail,
-        registeredEmail: cleanNewEmail,
-        authUid: undefined,
-        accountStatus: 'pending',
-        acceptedAt: undefined,
-      });
-
       await logAdminActivity(
         'REPLACE_MEMBER_EMAIL',
         `${replaceEmailTarget.name} (${cleanNewEmail})`,
@@ -920,15 +901,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
       requireTypedText: 'HAPUS',
       onConfirm: async () => {
         await deleteMemberAccount(m.email || m.id);
-        await onUpdateMember({
-          ...m,
-          email: '',
-          registeredEmail: undefined,
-          authUid: undefined,
-          accountStatus: 'unregistered',
-          acceptedAt: undefined,
-          disabledAt: undefined,
-        });
         await loadData();
         pushToast(
           'success',
@@ -998,18 +970,6 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
         regDivision,
         selectedMemberId || undefined
       );
-
-      // Strictly update the matching member by member_id
-      const targetMemId = selectedMemberId || created.memberId;
-      const targetMem = members.find((m) => String(m.databaseId || m.id) === String(targetMemId));
-      if (targetMem) {
-        await onUpdateMember({
-          ...targetMem,
-          email: created.email,
-          registeredEmail: created.email,
-          accountStatus: targetMem.id === 'm-4' ? 'active' : 'pending',
-        });
-      }
 
       await loadData();
       pushToast(
