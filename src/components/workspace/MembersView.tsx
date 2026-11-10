@@ -233,11 +233,6 @@ export const MembersView: React.FC<MembersViewProps> = ({
   return (
     <div className="space-y-8 max-w-6xl mx-auto pb-12">
       {/* Modals */}
-      <InvitationManagerModal
-        isOpen={isInviteOpen}
-        onClose={() => setIsInviteOpen(false)}
-      />
-
       <EditMemberModal
         isOpen={!!editingMember}
         member={editingMember}
