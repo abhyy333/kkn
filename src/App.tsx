@@ -1335,6 +1335,22 @@ function AppContent() {
     setStakeholders([]);
     setPublicArticles([]);
     setAnnouncements([]);
+    setVillageResearch({
+      villageName: unitConfig.villageName,
+      kecamatan: unitConfig.district,
+      kabupaten: unitConfig.regency.split(',')[0] || '',
+      province: unitConfig.regency.split(',').slice(1).join(',').trim(),
+      geography: '',
+      elevation: '',
+      totalPopulation: null,
+      totalHouseholds: null,
+      totalAreaHectares: null,
+      dusuns: [],
+      potencies: [],
+      swot: { strengths: [], weaknesses: [], opportunities: [], threats: [] },
+      priorityNeeds: [],
+    });
+    setDocumentation([]);
     appNotify({
       type: 'success',
       title: 'Data Operasional Dihapus',
@@ -1491,16 +1507,21 @@ function AppContent() {
           documentation={documentation}
           onUpdateReportNote={handleDplReportNote}
           onSwitchToPublic={() => handleChangeViewMode('public')}
-          onRefreshData={() => {
-            if (isSupabaseConfigured) {
-              supabase
-                .from('reports')
-                .select('*')
-                .then(({ data }) => {
-                  if (Array.isArray(data) && data.length > 0) {
-                    setReports(data as ReportRecord[]);
-                  }
-                });
+          onRefreshData={async () => {
+            try {
+              const latestReports = await listWorkspaceRecords<ReportRecord>('reports');
+              setReports(latestReports);
+              appNotify({
+                type: 'success',
+                title: 'Laporan Diperbarui',
+                message: 'Daftar laporan berhasil dimuat ulang dari Supabase.',
+              });
+            } catch (error) {
+              appNotify({
+                type: 'error',
+                title: 'Gagal Memuat Laporan',
+                message: error instanceof Error ? error.message : 'Data laporan tidak dapat dimuat.',
+              });
             }
           }}
         />
