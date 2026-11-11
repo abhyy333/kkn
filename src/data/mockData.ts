@@ -40,6 +40,8 @@ export const OFFICIAL_DPL_MEMBER_ID = 'c7bf53d4-1c27-424e-992a-7c7c0f98707a';
 
 export const DPL_SUPERVISOR = {
   id: OFFICIAL_DPL_MEMBER_ID,
+  databaseId: OFFICIAL_DPL_MEMBER_ID,
+  dbId: OFFICIAL_DPL_MEMBER_ID,
   projectId: OFFICIAL_PROJECT_ID,
   name: 'Lalu Muhammad Aby Dujana, M.Si.',
   nip: '198910222024061001',
@@ -55,6 +57,8 @@ export const DPL_SUPERVISOR = {
 export const INITIAL_MEMBERS: Member[] = [
   {
     id: 'm-1',
+    databaseId: '76b1ad85-cc45-499e-af8b-699000a7707f',
+    dbId: '76b1ad85-cc45-499e-af8b-699000a7707f',
     name: 'Josua Ujung',
     role: 'Ketua',
     position: 'Ketua KKN',
@@ -78,6 +82,8 @@ export const INITIAL_MEMBERS: Member[] = [
   },
   {
     id: 'm-2',
+    databaseId: 'b55a7c59-aa05-4115-91e4-a98e1de57115',
+    dbId: 'b55a7c59-aa05-4115-91e4-a98e1de57115',
     name: 'Mulia Oktaviani',
     role: 'Divisi Humper 2',
     position: 'Divisi Humper 2',
@@ -100,6 +106,8 @@ export const INITIAL_MEMBERS: Member[] = [
   },
   {
     id: 'm-3',
+    databaseId: 'f72a5801-6310-495f-91f9-2a9f36fd8a02',
+    dbId: 'f72a5801-6310-495f-91f9-2a9f36fd8a02',
     name: 'Tsaniatul Amni Alwan',
     role: 'Bendahara',
     position: 'Bendahara',
@@ -122,6 +130,8 @@ export const INITIAL_MEMBERS: Member[] = [
   },
   {
     id: 'm-4',
+    databaseId: 'f2127232-091d-4da3-83e1-564774f868ee',
+    dbId: 'f2127232-091d-4da3-83e1-564774f868ee',
     name: 'Abdul Habir Al Majdi',
     role: 'Divisi Acara 1',
     position: 'Divisi Acara 1',
@@ -146,6 +156,8 @@ export const INITIAL_MEMBERS: Member[] = [
   },
   {
     id: 'm-5',
+    databaseId: '4bd302f5-cb34-4e9c-b50c-ba40f15d2138',
+    dbId: '4bd302f5-cb34-4e9c-b50c-ba40f15d2138',
     name: 'Asma Nadiya',
     role: 'Divisi Acara 2',
     position: 'Divisi Acara 2',
@@ -168,6 +180,8 @@ export const INITIAL_MEMBERS: Member[] = [
   },
   {
     id: 'm-6',
+    databaseId: 'df362ef0-450c-40e6-9afd-6bc90391d722',
+    dbId: 'df362ef0-450c-40e6-9afd-6bc90391d722',
     name: 'Muhammad Agits Haibatulloh',
     role: 'Divisi PDD 1',
     position: 'Divisi PDD 1',
@@ -190,6 +204,8 @@ export const INITIAL_MEMBERS: Member[] = [
   },
   {
     id: 'm-7',
+    databaseId: 'c1761b8e-7ef5-4f79-9f77-fd422bb572f4',
+    dbId: 'c1761b8e-7ef5-4f79-9f77-fd422bb572f4',
     name: 'Nurul Ainun',
     role: 'Divisi PDD 2',
     position: 'Divisi PDD 2',
@@ -212,6 +228,8 @@ export const INITIAL_MEMBERS: Member[] = [
   },
   {
     id: 'm-8',
+    databaseId: '4dbcec1e-a8e7-438e-8070-26c81650c6d4',
+    dbId: '4dbcec1e-a8e7-438e-8070-26c81650c6d4',
     name: 'Zidane Ath Thoriq',
     role: 'Divisi Humper 1',
     position: 'Divisi Humper 1',
@@ -234,6 +252,8 @@ export const INITIAL_MEMBERS: Member[] = [
   },
   {
     id: 'm-9',
+    databaseId: '78d752d2-5420-445f-b86c-48a63c101742',
+    dbId: '78d752d2-5420-445f-b86c-48a63c101742',
     name: 'Dini Aminarti',
     role: 'Sekretaris',
     position: 'Sekretaris',
@@ -256,6 +276,8 @@ export const INITIAL_MEMBERS: Member[] = [
   },
   {
     id: 'm-10',
+    databaseId: '9b9cacc4-1c4d-4cc0-b71f-1b4b889974d7',
+    dbId: '9b9cacc4-1c4d-4cc0-b71f-1b4b889974d7',
     name: 'Putu Sri Astiningsih',
     role: 'Divisi Konsumsi',
     position: 'Divisi Konsumsi',

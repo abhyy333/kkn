@@ -23,6 +23,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ConfirmProvider, useConfirm } from './context/ConfirmContext';
 import { AuthModal } from './components/auth/AuthModal';
 import { ResetPasswordView } from './components/auth/ResetPasswordView';
+import { FirstLoginPasswordView } from './components/auth/FirstLoginPasswordView';
 import { InvitationManagerModal } from './components/admin/InvitationManagerModal';
 
 import { Sidebar } from './components/layout/Sidebar';
@@ -107,8 +108,7 @@ function AppContent() {
     isAdmin,
     isSuperAdmin,
     loading,
-    isPasswordRecoveryMode,
-    clearPasswordRecoveryMode,
+    mustChangePassword,
     sessionExpiredNotice,
     syncOwnProfileMetadata,
   } = useAuth();
@@ -226,7 +226,6 @@ function AppContent() {
       // 0. Dedicated Password Recovery Route (/reset-password)
       if (
         path === '/reset-password' ||
-        isPasswordRecoveryMode ||
         hash.includes('type=recovery') ||
         search.includes('type=recovery')
       ) {
@@ -336,7 +335,7 @@ function AppContent() {
 
     window.addEventListener('popstate', handleLocation);
     return () => window.removeEventListener('popstate', handleLocation);
-  }, [user, profile, isSuperAdmin, loading, isPasswordRecoveryMode]);
+  }, [user, profile, isSuperAdmin, loading]);
 
   // Surface login modal automatically if an active session expired
   useEffect(() => {
@@ -1513,19 +1512,27 @@ function AppContent() {
   const upcomingMeetings = meetings.filter((m) => m.status === 'upcoming').length;
   const activePrograms = programs.filter((p) => p.status === 'in_progress').length;
 
-  if (isResetPasswordRoute || isPasswordRecoveryMode) {
+  if (isResetPasswordRoute) {
     return (
       <ResetPasswordView
         onRedirectToLogin={() => {
-          clearPasswordRecoveryMode();
           setIsResetPasswordRoute(false);
           navigateTo('/public');
           setIsAuthModalOpen(true);
         }}
         onNavigateToPublic={() => {
-          clearPasswordRecoveryMode();
           setIsResetPasswordRoute(false);
           navigateTo('/public');
+        }}
+      />
+    );
+  }
+
+  if (user && (mustChangePassword || profile?.mustChangePassword)) {
+    return (
+      <FirstLoginPasswordView
+        onCompleted={() => {
+          navigateTo(profile?.role === 'dpl' ? '/dpl' : '/workspace');
         }}
       />
     );

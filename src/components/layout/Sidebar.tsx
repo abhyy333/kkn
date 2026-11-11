@@ -137,6 +137,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (targetMode === 'admin' && !isSuperAdmin) return;
     setActiveMode(targetMode);
     onChangeViewMode(targetMode);
+    if (targetMode === 'admin') {
+      window.history.pushState({}, '', '/admin');
+    } else {
+      window.history.pushState({}, '', '/workspace');
+    }
     logAdminActivity(
       'SWITCH_MODE',
       profile?.email || user?.email || 'user',

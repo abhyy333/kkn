@@ -114,7 +114,7 @@ export const MemberDetailModal: React.FC<MemberDetailModalProps> = ({
           <div className="flex items-center gap-3.5 min-w-0">
             <div className="relative">
               <img
-                src={member.avatar}
+                src={member.avatar || undefined}
                 alt={member.name}
                 className="w-14 h-14 rounded-full object-cover border-2 border-white shadow-sm ring-1 ring-stone-200"
               />

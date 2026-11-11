@@ -46,6 +46,7 @@ import {
   Download,
   ShieldCheck,
   Check,
+  Copy,
   FileText,
   Edit3,
   Ban,
@@ -139,6 +140,7 @@ type AdminTab =
   | 'overview'
   | 'users'
   | 'email-registration'
+  | 'account-management'
   | 'dpl-supervision'
   | 'crud-center'
   | 'public-content'
@@ -252,7 +254,8 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
 }) => {
   const {
     user,
-    registerMemberEmail,
+    provisionMemberAccount,
+    resetMemberPassword,
     updateRegisteredEmail,
     disableMemberAccount,
     restoreMemberAccount,
@@ -349,6 +352,15 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
   const [regPosition, setRegPosition] = useState('');
   const [regDivision, setRegDivision] = useState('Divisi Acara');
   const [isSubmittingReg, setIsSubmittingReg] = useState(false);
+
+  // Account Management & Provisioning State
+  const [tempPasswordModalData, setTempPasswordModalData] = useState<any | null>(null);
+  const [copiedTempPassword, setCopiedTempPassword] = useState(false);
+  const [resetPasswordTarget, setResetPasswordTarget] = useState<Member | null>(null);
+  const [resetConfirmNameVal, setResetConfirmNameVal] = useState('');
+  const [resetReasonVal, setResetReasonVal] = useState('Reset password sementara oleh Super Admin');
+  const [isSubmittingReset, setIsSubmittingReset] = useState(false);
+  const [isSubmittingProvision, setIsSubmittingProvision] = useState(false);
 
   // Member Profile & Email Edit Modal State
   const [editingMemberModal, setEditingMemberModal] = useState<Member | null>(null);
@@ -1008,13 +1020,15 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
 
     setIsSubmittingRegisterTarget(true);
     try {
-      const created = await registerMemberEmail(
-        registerEmailTarget.name,
-        cleanEmail,
-        registerEmailTarget.position || registerEmailTarget.role,
-        registerEmailTarget.division,
-        registerEmailTarget.id
-      );
+      const modalData = await provisionMemberAccount({
+        memberId: registerEmailTarget.id,
+        email: cleanEmail,
+        confirmMemberName: registerEmailTarget.name,
+        role: registerEmailTarget.role,
+        position: registerEmailTarget.position || registerEmailTarget.role,
+        division: registerEmailTarget.division,
+      });
+      setTempPasswordModalData(modalData);
 
       await onUpdateMember({
         ...registerEmailTarget,
@@ -1174,13 +1188,15 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
             nextAccountStatus = 'pending';
           }
         } else {
-          await registerMemberEmail(
-            editMemName.trim(),
-            cleanEmail,
-            editMemRole.trim(),
-            editMemDivision,
-            editingMemberModal.id
-          );
+          const modalData = await provisionMemberAccount({
+            memberId: editingMemberModal.id,
+            email: cleanEmail,
+            confirmMemberName: editMemName.trim(),
+            role: editMemRole.trim(),
+            position: editMemRole.trim(),
+            division: editMemDivision,
+          });
+          setTempPasswordModalData(modalData);
           nextAccountStatus = editingMemberModal.id === 'm-4' ? 'active' : 'pending';
         }
       } else if (editingMemberModal.id !== 'm-4') {
@@ -1303,89 +1319,82 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
     }
   };
 
-  // Submit New or Updated Email Registration
-  const handleRegisterEmailSubmit = async (e: React.FormEvent) => {
+  // Submit Account Provisioning
+  const handleProvisionAccountSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSubmittingReg(true);
+    if (!selectedMemberId) {
+      pushToast('error', 'Pilih Anggota', 'Pilih anggota dari roster terlebih dahulu.');
+      return;
+    }
+    const cleanEmail = regEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      pushToast('error', 'Format Email Tidak Valid', 'Masukkan alamat email yang valid.');
+      return;
+    }
+    const foundMem = enrichedMembers.find((m) => m.id === selectedMemberId);
+    if (!foundMem) {
+      pushToast('error', 'Anggota Tidak Ditemukan', 'Pilih anggota yang valid.');
+      return;
+    }
 
+    setIsSubmittingProvision(true);
     try {
-      const cleanEmail = regEmail.trim().toLowerCase();
-      if (!cleanEmail || !cleanEmail.includes('@')) {
-        pushToast('error', 'Format Email Tidak Valid', 'Masukkan alamat email yang valid.');
-        setIsSubmittingReg(false);
-        return;
-      }
-
-      // Enforce uniqueness across registered_emails
-      const duplicate = registeredEmails.find(
-        (r) =>
-          r.email.trim().toLowerCase() === cleanEmail &&
-          String(r.memberId || (r as any).member_id) !== String(selectedMemberId)
-      );
-      if (duplicate) {
-        pushToast(
-          'error',
-          'Email Sudah Digunakan',
-          `Alamat email "${cleanEmail}" sudah terdaftar untuk anggota ${duplicate.name}. Setiap anggota harus memiliki alamat email yang unik.`
-        );
-        setIsSubmittingReg(false);
-        return;
-      }
-
-      const created = await registerMemberEmail(
-        regName.trim(),
-        cleanEmail,
-        regPosition.trim(),
-        regDivision,
-        selectedMemberId || undefined
-      );
-
-      // Strictly update the matching member by member_id
-      const targetMemId = selectedMemberId || created.memberId;
-      const targetMem = members.find((m) => m.id === targetMemId);
-      if (targetMem) {
-        await onUpdateMember({
-          ...targetMem,
-          email: created.email,
-          registeredEmail: created.email,
-          accountStatus: targetMem.id === 'm-4' ? 'active' : 'pending',
-        });
-      }
-
-      if (isSupabaseConfigured && targetMemId) {
-        try {
-          await supabase.from('member_email_history').insert({
-            member_id: targetMemId,
-            member_name: regName.trim(),
-            previous_email: null,
-            replacement_email: cleanEmail,
-            action: 'REGISTER',
-            performed_by: user?.email || 'abhyy333@gmail.com',
-            reason: 'Pendaftaran email melalui Tab Registrasi Email',
-            created_at: new Date().toISOString(),
-          });
-        } catch {}
-      }
+      const modalData = await provisionMemberAccount({
+        memberId: foundMem.id,
+        email: cleanEmail,
+        confirmMemberName: foundMem.name,
+        role: foundMem.role,
+        position: foundMem.position || foundMem.role,
+        division: foundMem.division,
+      });
 
       await loadData();
+      setTempPasswordModalData(modalData);
+      setRegEmail('');
+      setSelectedMemberId('');
+      setRegName('');
       pushToast(
         'success',
-        'Email Berhasil Didaftarkan',
-        `Email ${created.email} terdaftar resmi untuk ${created.name} (${created.position}).`
+        'Akun Anggota Berhasil Dibuat',
+        `Akun untuk ${foundMem.name} berhasil diprovision. Simpan password sementara.`
       );
-
-      setRegName('');
-      setRegEmail('');
-      setRegPosition('');
-      setSelectedMemberId('');
     } catch (err: any) {
-      if (err?.message?.includes('unique') || err?.code === '23505') {
-        pushToast('error', 'Email Sudah Digunakan', 'Alamat email sudah digunakan oleh anggota lain dalam database. Gunakan alamat email unik.');
-      } else {
-        pushToast('error', 'Gagal Mendaftarkan Email', err?.message || 'Terjadi kesalahan.');
-      }
+      pushToast('error', 'Gagal Membuat Akun', err?.message || 'Terjadi kesalahan sistem.');
     } finally {
-      setIsSubmittingReg(false);
+      setIsSubmittingProvision(false);
+    }
+  };
+
+  const handleExecuteResetPasswordModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetPasswordTarget) return;
+    if (resetConfirmNameVal.trim().toLowerCase() !== resetPasswordTarget.name.trim().toLowerCase()) {
+      pushToast('error', 'Konfirmasi Nama Tidak Cocok', `Ketik nama lengkap "${resetPasswordTarget.name}" dengan tepat untuk mengonfirmasi.`);
+      return;
+    }
+
+    setIsSubmittingReset(true);
+    try {
+      const modalData = await resetMemberPassword({
+        memberId: resetPasswordTarget.id,
+        confirmMemberName: resetPasswordTarget.name,
+        reason: resetReasonVal.trim() || 'Reset password sementara oleh Super Admin',
+      });
+
+      await loadData();
+      setResetPasswordTarget(null);
+      setResetConfirmNameVal('');
+      setResetReasonVal('Reset password sementara oleh Super Admin');
+      setTempPasswordModalData(modalData);
+      pushToast(
+        'success',
+        'Password Berhasil Direset',
+        `Password sementara baru untuk ${resetPasswordTarget.name} telah dibuat.`
+      );
+    } catch (err: any) {
+      pushToast('error', 'Gagal Mereset Password', err?.message || 'Terjadi kesalahan.');
+    } finally {
+      setIsSubmittingReset(false);
     }
   };
 
@@ -3815,7 +3824,7 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
             [
               { id: 'overview', label: 'Overview' },
               { id: 'users', label: `Members & Accounts (${enrichedMembers.length})` },
-              { id: 'email-registration', label: `Email Registration (${registeredEmails.length})` },
+              { id: 'account-management', label: `Account Management (${registeredEmails.length})` },
               { id: 'dpl-supervision', label: 'DPL & Supervisi' },
               { id: 'crud-center', label: 'Module Data' },
               { id: 'public-content', label: 'Public Content' },
@@ -3826,9 +3835,9 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
           ).map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => setActiveTab(tab.id as any)}
               className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap ${
-                activeTab === tab.id
+                activeTab === tab.id || (activeTab === 'email-registration' && tab.id === 'account-management')
                   ? 'bg-[#E8ECE9] text-[#284230] font-medium'
                   : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/50 font-normal'
               }`}
@@ -4089,7 +4098,7 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-3">
                             <img
-                              src={m.avatar}
+                              src={m.avatar || undefined}
                               alt={m.name}
                               className="w-8 h-8 rounded-full object-cover border border-stone-200"
                             />
@@ -4229,236 +4238,428 @@ export const AdminConsoleView: React.FC<AdminConsoleProps> = ({
       )}
 
       {/* =====================================================================
-          TAB 3: EMAIL REGISTRATION TABLE (registered_emails)
+          TAB 3: ACCOUNT MANAGEMENT & PROVISIONING (Supabase Auth & registered_emails)
          ===================================================================== */}
-      {activeTab === 'email-registration' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left: Form to Register Member Email */}
-          <div className="p-5 rounded-lg bg-white border border-[#E8E6DF] space-y-4 self-start">
-            <div>
-              <h2 className="text-sm font-semibold text-stone-900">
-                Daftarkan Email Anggota
-              </h2>
-              <p className="text-xs text-stone-500 mt-0.5">
-                Pilih anggota dari roster resmi KKN lalu simpan alamat email ke tabel <code className="font-mono">registered_emails</code>.
-              </p>
-            </div>
-
-            <form onSubmit={handleRegisterEmailSubmit} className="space-y-3 text-xs">
+      {(activeTab === 'email-registration' || activeTab === 'account-management') && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Left: Form to Provision New Account */}
+            <div className="p-5 rounded-lg bg-white border border-[#E8E6DF] space-y-4 self-start">
               <div>
-                <label className="block text-[11px] font-medium text-stone-700 mb-1">
-                  Pilih Anggota KKN
-                </label>
-                <select
-                  value={selectedMemberId}
-                  onChange={handleMemberSelectForReg}
-                  className="w-full px-3 py-2 rounded-md border border-stone-200 bg-[#FAF9F5] text-xs focus:outline-none focus:border-[#4A6B53]"
-                >
-                  <option value="">-- Pilih Anggota KKN --</option>
-                  {enrichedMembers.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name} — {m.role} ({m.email ? m.email : 'Belum Didaftarkan'})
-                    </option>
-                  ))}
-                </select>
+                <h2 className="text-sm font-semibold text-stone-900 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-[#4A6B53]" />
+                  <span>Buat Akun Anggota (Provisioning)</span>
+                </h2>
+                <p className="text-xs text-stone-500 mt-0.5">
+                  Pilih anggota dari roster database <code className="font-mono">members</code> dan daftarkan email resmi untuk menerbitkan password sementara.
+                </p>
               </div>
 
-              <div>
-                <label className="block text-[11px] font-medium text-stone-700 mb-1">
-                  Nama Lengkap *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={regName}
-                  onChange={(e) => setRegName(e.target.value)}
-                  placeholder="Contoh: Josua Ujung"
-                  className="w-full px-3 py-2 rounded-md border border-stone-200"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-medium text-stone-700 mb-1">
-                  Alamat Email Resmi *
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={regEmail}
-                  onChange={(e) => setRegEmail(e.target.value)}
-                  placeholder="Masukkan email asli anggota..."
-                  className="w-full px-3 py-2 rounded-md border border-stone-200 font-mono"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
+              <form onSubmit={handleProvisionAccountSubmit} className="space-y-3 text-xs">
                 <div>
                   <label className="block text-[11px] font-medium text-stone-700 mb-1">
-                    Jabatan *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={regPosition}
-                    onChange={(e) => setRegPosition(e.target.value)}
-                    placeholder="Contoh: Ketua"
-                    className="w-full px-3 py-2 rounded-md border border-stone-200"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-medium text-stone-700 mb-1">
-                    Divisi *
+                    Pilih Anggota KKN / DPL *
                   </label>
                   <select
-                    value={regDivision}
-                    onChange={(e) => setRegDivision(e.target.value)}
-                    className="w-full px-3 py-2 rounded-md border border-stone-200 bg-white"
+                    value={selectedMemberId}
+                    onChange={handleMemberSelectForReg}
+                    className="w-full px-3 py-2 rounded-md border border-stone-200 bg-[#FAF9F5] text-xs focus:outline-none focus:border-[#4A6B53]"
                   >
-                    {DIVISIONS.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
+                    <option value="">-- Pilih Anggota dari Roster --</option>
+                    {enrichedMembers.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} — {m.role} ({m.email ? m.email : 'Belum Ada Akun'})
                       </option>
                     ))}
                   </select>
                 </div>
+
+                <div>
+                  <label className="block text-[11px] font-medium text-stone-700 mb-1">
+                    Nama Lengkap *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={regName}
+                    onChange={(e) => setRegName(e.target.value)}
+                    placeholder="Nama lengkap..."
+                    className="w-full px-3 py-2 rounded-md border border-stone-200 bg-stone-50"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-medium text-stone-700 mb-1">
+                    Alamat Email Login Resmi *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={regEmail}
+                    onChange={(e) => setRegEmail(e.target.value)}
+                    placeholder="nama@domain.com"
+                    className="w-full px-3 py-2 rounded-md border border-stone-200 font-mono"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSubmittingProvision}
+                  className="w-full py-2.5 px-4 rounded-md bg-[#4A6B53] hover:bg-[#3d5944] text-white font-semibold transition-colors disabled:opacity-50 text-xs shadow-2xs"
+                >
+                  {isSubmittingProvision ? 'Membuat Akun & Password...' : 'Buat Akun & Terbitkan Password'}
+                </button>
+              </form>
+            </div>
+
+            {/* Right: Authoritative Account List & Status Table */}
+            <div className="lg:col-span-2 p-5 rounded-lg bg-white border border-[#E8E6DF] space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-100 pb-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-stone-900">
+                    Daftar Akun Anggota Terpusat ({enrichedMembers.length})
+                  </h2>
+                  <p className="text-xs text-stone-500">
+                    Status autentikasi, manajemen password, dan hak akses dari Supabase.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={emailSearch}
+                    onChange={(e) => setEmailSearch(e.target.value)}
+                    placeholder="Cari anggota atau email..."
+                    className="px-3 py-1.5 rounded-md border border-stone-200 text-xs"
+                  />
+                </div>
               </div>
 
-              <button
-                type="submit"
-                disabled={isSubmittingReg}
-                className="w-full py-2 px-4 rounded-md bg-[#4A6B53] hover:bg-[#3d5944] text-white font-medium transition-colors disabled:opacity-50"
-              >
-                {isSubmittingReg ? 'Menyimpan...' : 'Simpan Email'}
-              </button>
-            </form>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-stone-200 text-[11px] font-medium text-stone-500">
+                      <th className="py-2.5 px-3">Nama & Jabatan</th>
+                      <th className="py-2.5 px-3">Email Login</th>
+                      <th className="py-2.5 px-3">Role</th>
+                      <th className="py-2.5 px-3">Status</th>
+                      <th className="py-2.5 px-3 text-right">Aksi Super Admin</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100">
+                    {enrichedMembers
+                      .filter(
+                        (m) =>
+                          !emailSearch.trim() ||
+                          m.name.toLowerCase().includes(emailSearch.toLowerCase()) ||
+                          (m.email && m.email.toLowerCase().includes(emailSearch.toLowerCase()))
+                      )
+                      .map((m) => {
+                        const isPrimaryAdmin = m.id === 'm-4' || m.email?.toLowerCase() === 'abhyy333@gmail.com';
+                        const hasAccount = Boolean(m.email && (m.accountStatus === 'active' || m.accountStatus === 'pending' || m.authUid));
+
+                        return (
+                          <tr key={m.id} className="hover:bg-stone-50/70">
+                            <td className="py-3 px-3">
+                              <div className="font-medium text-stone-900">{m.name}</div>
+                              <div className="text-[11px] text-stone-500">
+                                {m.role} · {m.division}
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 font-mono text-stone-700">
+                              {m.email || <span className="text-stone-400 italic">Belum ada email</span>}
+                            </td>
+                            <td className="py-3 px-3 font-mono text-[11px] text-stone-600">
+                              {m.systemRole || 'member'}
+                            </td>
+                            <td className="py-3 px-3">
+                              {m.accountStatus === 'active' ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  Aktif
+                                </span>
+                              ) : m.accountStatus === 'disabled' ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-red-50 text-red-700 border border-red-200">
+                                  Nonaktif
+                                </span>
+                              ) : m.email ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                                  Menunggu Login
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-stone-100 text-stone-500">
+                                  Belum Dibuatkan Akun
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                {hasAccount ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setResetPasswordTarget(m);
+                                        setResetConfirmNameVal('');
+                                        setResetReasonVal('Reset password sementara oleh Super Admin');
+                                      }}
+                                      disabled={isPrimaryAdmin}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-amber-200 bg-amber-50/50 hover:bg-amber-100 text-amber-800 text-[11px] font-medium transition-colors disabled:opacity-40"
+                                      title="Reset password sementara anggota"
+                                    >
+                                      <RotateCcw className="w-3 h-3 text-amber-700" />
+                                      <span>Reset Password</span>
+                                    </button>
+
+                                    {m.accountStatus === 'disabled' ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRestoreAccount(m)}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-emerald-200 bg-white hover:bg-emerald-50 text-emerald-700 text-[11px] font-medium transition-colors"
+                                      >
+                                        <span>Pulihkan</span>
+                                      </button>
+                                    ) : (
+                                      !isPrimaryAdmin && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handlePromptDisableAccount(m)}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-stone-200 bg-white hover:bg-stone-50 text-stone-600 text-[11px] font-medium transition-colors"
+                                        >
+                                          <span>Nonaktifkan</span>
+                                        </button>
+                                      )
+                                    )}
+
+                                    {!isPrimaryAdmin && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenRemoveEmail(m)}
+                                        className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-200 bg-white hover:bg-red-50 text-red-600 text-[11px] font-medium transition-colors"
+                                        title="Hapus akun login"
+                                      >
+                                        <Trash2 className="w-3 h-3 text-red-500" />
+                                        <span>Hapus</span>
+                                      </button>
+                                    )}
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedMemberId(m.id);
+                                      setRegName(m.name);
+                                      setRegEmail(`${m.name.toLowerCase().replace(/[^a-z0-9]/g, '')}@kknspace.id`);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-[#4A6B53] hover:bg-[#3d5944] text-white text-[11px] font-medium transition-colors"
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                    <span>Buat Akun</span>
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
+        </div>
+      )}
 
-          {/* Right: Authoritative registered_emails Table */}
-          <div className="lg:col-span-2 p-5 rounded-lg bg-white border border-[#E8E6DF] space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-100 pb-3">
-              <div>
-                <h2 className="text-sm font-semibold text-stone-900">
-                  Daftar Email Terdaftar ({filteredRegisteredEmails.length})
-                </h2>
-                <p className="text-xs text-stone-500">
-                  Validasi aktivasi akun Supabase Auth anggota tim KKN.
-                </p>
-              </div>
+      {/* =====================================================================
+          ONE-TIME TEMPORARY PASSWORD MODAL
+         ===================================================================== */}
+      {tempPasswordModalData && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl border border-[#E8E6DF] max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
               <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-emerald-700" />
+                <h3 className="font-serif font-bold text-base text-stone-900">
+                  Password Sementara Anggota
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTempPasswordModalData(null)}
+                className="text-stone-400 hover:text-stone-700"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-lg bg-[#FAF9F5] border border-stone-200 space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-stone-500">Anggota:</span>
+                <span className="font-semibold text-stone-900">
+                  {tempPasswordModalData.memberName}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-stone-500">Email Login:</span>
+                <span className="font-mono font-semibold text-stone-900">
+                  {tempPasswordModalData.email}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-stone-500">Jabatan / Role:</span>
+                <span className="text-stone-700">
+                  {tempPasswordModalData.position || tempPasswordModalData.role}
+                </span>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 space-y-2 text-center">
+              <span className="text-[11px] font-bold text-emerald-900 uppercase tracking-wider block">
+                Password Sementara (Hanya Ditampilkan Sekali)
+              </span>
+              <div className="font-mono text-lg font-bold text-emerald-950 bg-white p-3 rounded-lg border border-emerald-300 tracking-wider select-all">
+                {tempPasswordModalData.temporaryPassword}
+              </div>
+              <div className="flex items-center justify-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(
+                      tempPasswordModalData.temporaryPassword
+                    );
+                    setCopiedTempPassword(true);
+                    setTimeout(() => setCopiedTempPassword(false), 2500);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md bg-[#4A6B53] text-white text-xs font-medium hover:bg-[#3d5944] transition-colors"
+                >
+                  {copiedTempPassword ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-200" />
+                      <span>Password Tersalin!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Salin Password</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {tempPasswordModalData.expiresAt && (
+              <div className="flex items-center gap-1.5 text-xs text-stone-500">
+                <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>
+                  Masa berlaku password sementara:{' '}
+                  <strong>
+                    {new Date(tempPasswordModalData.expiresAt).toLocaleString('id-ID')}
+                  </strong>
+                </span>
+              </div>
+            )}
+
+            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-900 leading-relaxed flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <span>
+                <strong>Peringatan Keamanan:</strong> Sampaikan password ini secara pribadi kepada anggota. Password tidak disimpan dan tidak akan ditampilkan lagi setelah jendela ini ditutup. Anggota wajib mengganti password pada login pertama.
+              </span>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-stone-100">
+              <button
+                type="button"
+                onClick={() => setTempPasswordModalData(null)}
+                className="px-4 py-2 rounded-lg bg-[#2D3748] text-white font-medium hover:bg-gray-800 text-xs"
+              >
+                Saya Sudah Menyimpan Password
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          RESET PASSWORD MODAL
+         ===================================================================== */}
+      {resetPasswordTarget && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl border border-[#E8E6DF] max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+              <div className="flex items-center gap-2">
+                <RotateCcw className="w-5 h-5 text-amber-600" />
+                <h3 className="font-serif font-bold text-base text-stone-900">
+                  Reset Password Anggota
+                </h3>
+              </div>
+              <button
+                type="button"
+                disabled={isSubmittingReset}
+                onClick={() => setResetPasswordTarget(null)}
+                className="text-stone-400 hover:text-stone-700"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-lg bg-[#FAF9F5] border border-stone-200 space-y-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-stone-500">Anggota:</span>
+                <span className="font-semibold text-stone-900">{resetPasswordTarget.name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-stone-500">Email Login:</span>
+                <span className="font-mono text-stone-700">{resetPasswordTarget.email || 'Belum ada email'}</span>
+              </div>
+            </div>
+
+            <form onSubmit={handleExecuteResetPasswordModal} className="space-y-3 text-xs">
+              <div>
+                <label className="block text-[11px] font-medium text-stone-700 mb-1">
+                  Alasan Reset (Opsional)
+                </label>
                 <input
                   type="text"
-                  value={emailSearch}
-                  onChange={(e) => setEmailSearch(e.target.value)}
-                  placeholder="Cari email atau nama..."
-                  className="px-3 py-1.5 rounded-md border border-stone-200 text-xs"
+                  value={resetReasonVal}
+                  onChange={(e) => setResetReasonVal(e.target.value)}
+                  placeholder="Contoh: Lupa password / Permintaan anggota"
+                  className="w-full px-3 py-2 rounded-lg border border-stone-200 text-xs"
                 />
               </div>
-            </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-stone-200 text-[11px] font-medium text-stone-500">
-                    <th className="py-2.5 px-3">Email Terdaftar</th>
-                    <th className="py-2.5 px-3">Nama & Jabatan</th>
-                    <th className="py-2.5 px-3">Role</th>
-                    <th className="py-2.5 px-3">Status</th>
-                    <th className="py-2.5 px-3 text-right">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-100">
-                  {filteredRegisteredEmails.map((rec) => {
-                    const isPrimaryAdmin = rec.email.toLowerCase() === 'abhyy333@gmail.com';
-                    // Link registry directly with members table record
-                    const recMemberId = (rec as any).member_id || rec.memberId;
-                    const matchedMem = members.find(
-                      (m) =>
-                        (recMemberId && (m.id === recMemberId || (m as any).dbId === recMemberId)) ||
-                        (m.email && m.email.toLowerCase() === rec.email.toLowerCase())
-                    );
+              <div>
+                <label className="block text-[11px] font-medium text-stone-700 mb-1">
+                  Ketik Nama Lengkap untuk Konfirmasi (<strong className="text-stone-900">{resetPasswordTarget.name}</strong>) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={resetConfirmNameVal}
+                  onChange={(e) => setResetConfirmNameVal(e.target.value)}
+                  placeholder={resetPasswordTarget.name}
+                  className="w-full px-3 py-2 rounded-lg border border-stone-200 text-xs"
+                />
+              </div>
 
-                    const member: Member & { regRecord?: RegisteredEmailRecord } = matchedMem
-                      ? {
-                          ...matchedMem,
-                          id: (matchedMem as any).dbId || (isUuid(matchedMem.id) ? matchedMem.id : (recMemberId || matchedMem.id)),
-                          email: rec.email,
-                          regRecord: rec,
-                        }
-                      : {
-                          id: recMemberId || rec.id,
-                          name: (rec as any).full_name || rec.name,
-                          role: rec.position || 'Anggota',
-                          division: rec.division || 'Umum',
-                          major: '',
-                          faculty: '',
-                          nim: '',
-                          phone: '',
-                          email: rec.email,
-                          registeredEmail: rec.email,
-                          emergencyContact: '',
-                          avatar: '',
-                          status: 'active',
-                          regRecord: rec,
-                        };
-
-                    return (
-                      <tr key={rec.id} className="hover:bg-stone-50/70">
-                        <td className="py-3 px-3 font-mono text-stone-900">
-                          {rec.email}
-                        </td>
-                        <td className="py-3 px-3">
-                          <div className="font-medium text-stone-900">{rec.name || (rec as any).full_name}</div>
-                          <div className="text-[11px] text-stone-500">
-                            {rec.position} · {rec.division}
-                          </div>
-                        </td>
-                        <td className="py-3 px-3 font-mono text-[11px] text-stone-600">
-                          {rec.systemRole || 'member'}
-                        </td>
-                        <td className="py-3 px-3">
-                          {rec.status === 'activated' ? (
-                            <span className="text-emerald-700 font-medium">Aktif</span>
-                          ) : rec.status === 'disabled' ? (
-                            <span className="text-red-700 font-medium">Dinonaktifkan</span>
-                          ) : (
-                            <span className="text-amber-700 font-medium">Menunggu Aktivasi</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingRegRecord(rec);
-                                setEditRegEmailVal(rec.email);
-                                setEditRegNameVal(rec.name || (rec as any).full_name || '');
-                                setEditRegPosVal(rec.position);
-                                setEditRegDivVal(rec.division);
-                              }}
-                              className="p-1.5 rounded border border-[#E8E6DF] text-stone-600 hover:bg-stone-50"
-                              title="Edit email/jabatan"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
-                            {!isPrimaryAdmin && (
-                              <button
-                                type="button"
-                                onClick={() => handleOpenRemoveEmail(member)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 text-[11px] font-medium transition-colors"
-                                title="Hapus email login anggota"
-                              >
-                                <Trash2 className="w-3.5 h-3.5 text-red-500" />
-                                <span>Hapus Email</span>
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-stone-100">
+                <button
+                  type="button"
+                  disabled={isSubmittingReset}
+                  onClick={() => setResetPasswordTarget(null)}
+                  className="px-3.5 py-2 rounded-lg border border-stone-200 text-stone-700 hover:bg-stone-50 text-xs"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={
+                    isSubmittingReset ||
+                    resetConfirmNameVal.trim().toLowerCase() !== resetPasswordTarget.name.trim().toLowerCase()
+                  }
+                  className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs disabled:opacity-50"
+                >
+                  {isSubmittingReset ? 'Mereset Password...' : 'Konfirmasi & Reset Password'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

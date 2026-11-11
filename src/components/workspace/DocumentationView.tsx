@@ -317,7 +317,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
             >
               <div className="aspect-4/3 w-full bg-stone-100 overflow-hidden relative">
                 <img
-                  src={photo.imageUrl}
+                  src={photo.imageUrl || undefined}
                   alt={photo.title}
                   className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
                   loading="lazy"
@@ -382,7 +382,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
           >
             <div className="max-h-[55vh] bg-stone-900 flex items-center justify-center overflow-hidden">
               <img
-                src={selectedPhoto.imageUrl}
+                src={selectedPhoto.imageUrl || undefined}
                 alt={selectedPhoto.title}
                 className="max-h-[55vh] w-auto object-contain"
               />

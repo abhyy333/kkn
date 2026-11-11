@@ -366,7 +366,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
                   {isImg ? (
                     <div className="w-14 h-12 rounded-md overflow-hidden bg-stone-100 border border-stone-200 shrink-0">
                       <img
-                        src={item.url}
+                        src={item.url || undefined}
                         alt={item.name}
                         className="w-full h-full object-cover"
                       />

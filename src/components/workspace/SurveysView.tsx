@@ -496,7 +496,7 @@ export const SurveysView: React.FC<SurveysViewProps> = ({
                     title="Lihat foto ukuran penuh"
                   >
                     <img
-                      src={url}
+                      src={url || undefined}
                       alt={`${s.title} - ${idx + 1}`}
                       className="w-16 h-12 object-cover rounded border border-[#E8E6DF] hover:opacity-90"
                     />

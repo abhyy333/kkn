@@ -546,7 +546,7 @@ export const PersonalProfilePage: React.FC<PersonalProfilePageProps> = ({
           {/* Avatar with Direct Device Upload Trigger */}
           <div className="relative group shrink-0">
             <img
-              src={avatarUrl || selfMember.avatar}
+              src={avatarUrl || selfMember.avatar || undefined}
               alt={name || selfMember.name}
               className="w-28 h-28 sm:w-32 sm:h-32 rounded-2xl object-cover ring-1 ring-stone-200 shadow-sm bg-stone-100"
             />

@@ -12,6 +12,15 @@ import {
   RegisteredEmailRecord as TypesRegisteredEmailRecord,
   AdminActivityLogRecord,
 } from '../types';
+import {
+  AccountSecurityStatus,
+  ProvisionedAccountModalData,
+  parseAccountSecurityStatus,
+  parseProvisionedAccountResponse,
+  resolveMemberDatabaseUuid,
+  resolveRoleFromMemberAccess,
+  validateFirstLoginPassword,
+} from '../utils/authSecurity';
 
 export type UserRole = 'ketua' | 'admin' | 'member' | 'dpl' | 'viewer';
 export type SystemRole = 'super_admin' | 'admin' | 'member' | 'dpl' | 'viewer' | 'user';
@@ -33,6 +42,7 @@ export interface InvitationItem {
 export interface RegisteredEmailRecord extends TypesRegisteredEmailRecord {
   role?: UserRole;
   systemRole?: SystemRole;
+  mustChangePassword?: boolean;
 }
 
 export interface AdminActivityLog extends AdminActivityLogRecord {
@@ -50,14 +60,16 @@ export interface UserProfile {
   division?: string;
   invitationToken?: string;
   memberId?: string;
-  accountStatus?: 'active' | 'pending' | 'revoked';
+  databaseMemberId?: string;
+  accountStatus?: 'active' | 'pending' | 'revoked' | 'disabled';
+  mustChangePassword?: boolean;
   acceptedAt?: string;
   emailVerified?: boolean;
   createdAt?: any;
 }
 
 /**
- * Compatible Auth User representation bridging Supabase Auth User with existing KKN SPACE components
+ * Compatible Auth User representation bridging Supabase Auth User with KKN SPACE components
  */
 export interface AppAuthUser {
   uid: string;
@@ -69,12 +81,6 @@ export interface AppAuthUser {
   rawSupabaseUser?: SupabaseUser;
 }
 
-export interface ActivationResult {
-  needsEmailVerification: boolean;
-  email: string;
-  profile: UserProfile;
-}
-
 interface AuthContextType {
   user: AppAuthUser | null;
   session: SupabaseSession | null;
@@ -84,8 +90,10 @@ interface AuthContextType {
   sessionExpiredNotice: string | null;
   clearSessionExpiredNotice: () => void;
   isSupabaseReady: boolean;
-  isPasswordRecoveryMode: boolean;
-  clearPasswordRecoveryMode: () => void;
+  mustChangePassword: boolean;
+  requiresPasswordChange: boolean;
+  isTemporaryPasswordExpired: boolean;
+  temporaryPasswordExpiresAt: string | null;
   isAdmin: boolean;
   isSuperAdmin: boolean;
   isMember: boolean;
@@ -97,25 +105,27 @@ interface AuthContextType {
   adminLogs: AdminActivityLog[];
   signInWithGoogle: () => Promise<void>;
   signInWithEmail: (email: string, pass: string) => Promise<UserProfile>;
-  checkRegisteredEmail: (email: string) => Promise<RegisteredEmailRecord | null>;
-  activateWithRegisteredEmail: (
-    email: string,
-    pass: string
-  ) => Promise<ActivationResult>;
-  resendVerificationEmail: (email: string) => Promise<void>;
-  requestPasswordReset: (email: string) => Promise<void>;
-  updateUserPassword: (newPassword: string) => Promise<void>;
+  checkMyAccountSecurityStatus: () => Promise<AccountSecurityStatus | null>;
+  completeFirstLoginPassword: (newPassword: string) => Promise<void>;
+  provisionMemberAccount: (params: {
+    memberId: string;
+    email: string;
+    confirmMemberName: string;
+    role?: string;
+    position?: string;
+    division?: string;
+  }) => Promise<ProvisionedAccountModalData>;
+  resetMemberPassword: (params: {
+    memberId: string;
+    confirmMemberName: string;
+    reason: string;
+    email?: string;
+    role?: string;
+    position?: string;
+    division?: string;
+  }) => Promise<ProvisionedAccountModalData>;
   fetchRegisteredEmails: () => Promise<RegisteredEmailRecord[]>;
   fetchActivityLogs: () => Promise<AdminActivityLogRecord[]>;
-  registerMemberEmail: (
-    nameOrRecord:
-      | string
-      | Omit<RegisteredEmailRecord, 'id' | 'status' | 'registeredAt' | 'registeredBy'>,
-    email?: string,
-    position?: string,
-    division?: string,
-    memberId?: string
-  ) => Promise<RegisteredEmailRecord>;
   updateRegisteredEmail: (
     email: string,
     updates: Partial<RegisteredEmailRecord>
@@ -129,20 +139,6 @@ interface AuthContextType {
     target: string,
     details: string
   ) => Promise<void>;
-  createInvitation: (
-    name: string,
-    email: string,
-    role: UserRole,
-    division: string
-  ) => Promise<string>;
-  fetchInvitations: () => Promise<InvitationItem[]>;
-  revokeInvitation: (id: string) => Promise<void>;
-  activateInvitation: (
-    token: string,
-    email: string,
-    pass: string,
-    displayName: string
-  ) => Promise<void>;
   signOut: () => Promise<void>;
   updateUserRole: (uid: string, role: UserRole) => Promise<void>;
   syncOwnProfileMetadata: (updates: {
@@ -154,60 +150,9 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const SUPER_ADMIN_EMAIL = 'abhyy333@gmail.com';
-
 // In-memory deduplication & session-scoped cache to prevent duplicate database queries
 const inflightProfileRequests = new Map<string, Promise<UserProfile | null>>();
 const memoryProfileCache = new Map<string, UserProfile>();
-
-// Authoritative Initial Registered Emails Directory
-// Strictly contains ONLY confirmed super_admin abhyy333@gmail.com (Abdul Habir Al Majdi - Divisi Acara 1).
-// Other members start with empty email ("Belum Didaftarkan") until registered by super_admin.
-export const INITIAL_REGISTERED_EMAILS: RegisteredEmailRecord[] = [
-  {
-    id: 'abhyy333_gmail_com',
-    email: 'abhyy333@gmail.com',
-    name: 'Abdul Habir Al Majdi',
-    position: 'Divisi Acara 1',
-    division: 'Divisi Acara',
-    role: 'member',
-    systemRole: 'super_admin',
-    memberId: 'm-4',
-    status: 'activated',
-    registeredBy: 'System Bootstrap',
-    registeredAt: '2026-07-15T08:00:00.000Z',
-    activatedAt: '2026-07-19T08:30:00.000Z',
-  },
-];
-
-export const INITIAL_ADMIN_LOGS: AdminActivityLog[] = [
-  {
-    id: 'log-1',
-    action: 'BOOTSTRAP_SUPER_ADMIN',
-    target: 'abhyy333@gmail.com',
-    adminEmail: 'system@kknspace.id',
-    adminName: 'System Security',
-    actorEmail: 'system@kknspace.id',
-    actorName: 'System Security',
-    timestamp: '2026-07-19T08:30:00.000Z',
-    details:
-      'Menautkan abhyy333@gmail.com ke profil Abdul Habir Al Majdi (Divisi Acara 1) dengan hak akses Super Admin.',
-    status: 'success',
-  },
-  {
-    id: 'log-2',
-    action: 'SYSTEM_SETTING_CHANGED',
-    target: 'Supabase Auth & registered_emails',
-    adminEmail: 'abhyy333@gmail.com',
-    adminName: 'Abdul Habir Al Majdi',
-    actorEmail: 'abhyy333@gmail.com',
-    actorName: 'Abdul Habir Al Majdi',
-    timestamp: '2026-07-19T09:00:00.000Z',
-    details:
-      'Mengintegrasikan autentikasi ke Supabase Auth dengan validasi tabel registered_emails.',
-    status: 'success',
-  },
-];
 
 function sanitizeEmailId(email: string): string {
   return email.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
@@ -234,6 +179,9 @@ function toAppRegisteredEmailRecord(row: Record<string, any>): RegisteredEmailRe
       normalized.status === 'pending'
         ? 'pending_activation'
         : normalized.status,
+    mustChangePassword: Boolean(
+      row.must_change_password === true || row.requires_password_change === true
+    ),
     activatedUid: normalized.activatedUid,
     activatedAt: normalized.activatedAt,
     disabledAt: normalized.disabledAt,
@@ -288,16 +236,20 @@ function mapSupabaseUserToAppUser(
   };
 }
 
-function detectUrlRecoveryContext(): boolean {
-  if (typeof window === 'undefined') return false;
-  const path = window.location.pathname;
-  const hash = window.location.hash || '';
-  const search = window.location.search || '';
-  return (
-    path === '/reset-password' ||
-    hash.includes('type=recovery') ||
-    search.includes('type=recovery')
-  );
+async function extractEdgeFunctionError(error: any, fallbackMessage: string): Promise<string> {
+  if (!error) return fallbackMessage;
+  let detail = error.message || fallbackMessage;
+  try {
+    const errBody = await error.context?.json?.();
+    if (errBody?.error) {
+      detail = String(errBody.error);
+    } else if (errBody?.message) {
+      detail = String(errBody.message);
+    }
+  } catch {
+    // Ignore context parse failure
+  }
+  return detail;
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -309,20 +261,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [sessionExpiredNotice, setSessionExpiredNotice] = useState<string | null>(
     null
   );
-  const [isPasswordRecoveryMode, setIsPasswordRecoveryMode] = useState<boolean>(
-    detectUrlRecoveryContext
-  );
+  const [mustChangePassword, setMustChangePassword] = useState<boolean>(false);
+  const [isTemporaryPasswordExpired, setIsTemporaryPasswordExpired] =
+    useState<boolean>(false);
+  const [temporaryPasswordExpiresAt, setTemporaryPasswordExpiresAt] = useState<
+    string | null
+  >(null);
+
   const [activeMode, setActiveMode] = useState<ActiveWorkspaceMode>('workspace');
   const [registeredEmails, setRegisteredEmails] = useState<RegisteredEmailRecord[]>([]);
   const [adminLogs, setAdminLogs] = useState<AdminActivityLog[]>([]);
 
-  // Track whether the user had an active session in this lifecycle to detect unexpected session expiration
   const hadActiveSessionRef = useRef(false);
   const isManualSignOutRef = useRef(false);
-
-  const clearPasswordRecoveryMode = () => {
-    setIsPasswordRecoveryMode(false);
-  };
 
   const clearSessionExpiredNotice = () => {
     setSessionExpiredNotice(null);
@@ -360,9 +311,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const mappedSbLogs: AdminActivityLog[] = sbLogs.map((l: any) => ({
           id: String(l.id),
           timestamp: String(l.timestamp || l.created_at || new Date().toISOString()),
-          adminEmail: String(l.admin_email || l.adminEmail || SUPER_ADMIN_EMAIL),
+          adminEmail: String(l.admin_email || l.adminEmail || ''),
           adminName: String(l.admin_name || l.adminName || 'Super Admin'),
-          actorEmail: String(l.admin_email || l.adminEmail || SUPER_ADMIN_EMAIL),
+          actorEmail: String(l.admin_email || l.adminEmail || ''),
           actorName: String(l.admin_name || l.adminName || 'Super Admin'),
           action: (l.action || 'SYSTEM_SETTING_CHANGED') as AdminActivityLogRecord['action'],
           target: String(l.target || '-'),
@@ -383,118 +334,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   /**
-   * Single-query lookup for `registered_emails` (used during initial registration check or fallback).
+   * Authoritative security status check using `get-my-account-security-status` Edge Function.
+   * Determines `requires_password_change` / `must_change_password`, expiration, and role from `member_access`.
    */
-  const fetchAuthoritativeEmailRecord = async (
-    emailInput: string
-  ): Promise<RegisteredEmailRecord | null> => {
-    const cleanEmail = emailInput.trim().toLowerCase();
-    if (!cleanEmail || isFabricatedLegacyRecord({ email: cleanEmail })) return null;
+  const checkMyAccountSecurityStatus = async (): Promise<AccountSecurityStatus | null> => {
+    if (!isSupabaseConfigured) return null;
 
-    // 1. If user is authenticated, query registered_emails table
-    const { data: sessionData } = await supabase.auth.getSession();
-    if (sessionData?.session?.user && isSupabaseConfigured) {
-      try {
-        const { data: sbRow, error: sbError } = await supabase
-          .from('registered_emails')
-          .select('*')
-          .ilike('email', cleanEmail)
-          .maybeSingle();
-
-        if (!sbError && sbRow && !isFabricatedLegacyRecord(sbRow)) {
-          const normalized = toAppRegisteredEmailRecord(sbRow);
-          if (normalized.status === 'revoked' || normalized.status === 'disabled') {
-            return null;
-          }
-          return normalized;
-        }
-      } catch (e) {
-        console.warn('Supabase registered_emails lookup notice:', e);
-      }
-    }
-
-    // 2. For unauthenticated activation checks, call secure server-side eligibility endpoint
     try {
-      // First attempt Supabase Edge Function: check-activation-eligibility
-      let edgeRes: any = null;
-      if (isSupabaseConfigured) {
-        try {
-          const { data, error } = await supabase.functions.invoke('check-activation-eligibility', {
-            body: { email: cleanEmail },
-          });
-          if (!error && data) {
-            edgeRes = data;
-          }
-        } catch {}
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+
+      const { data, error } = await supabase.functions.invoke(
+        'get-my-account-security-status',
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          body: {},
+        }
+      );
+
+      if (error) {
+        const errMsg = await extractEdgeFunctionError(error, '');
+        if (
+          errMsg.toLowerCase().includes('expired') ||
+          errMsg.toLowerCase().includes('kedaluwarsa')
+        ) {
+          setMustChangePassword(true);
+          setIsTemporaryPasswordExpired(true);
+        }
+        return null;
       }
 
-      // Fallback to local server proxy endpoint /api/auth/check-activation-eligibility
-      if (!edgeRes) {
-        const res = await fetch('/api/auth/check-activation-eligibility', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: cleanEmail }),
-        });
-        if (res.ok) {
-          edgeRes = await res.json();
-        }
+      if (data) {
+        const parsed = parseAccountSecurityStatus(data);
+        setMustChangePassword(parsed.requiresPasswordChange);
+        setIsTemporaryPasswordExpired(parsed.isTemporaryPasswordExpired);
+        setTemporaryPasswordExpiresAt(parsed.expiresAt);
+        return parsed;
       }
-
-      if (edgeRes) {
-        if (!edgeRes.eligible) {
-          if (edgeRes.code === 'unregistered_email') {
-            throw new Error('Email ini belum didaftarkan oleh Administrator KKN.');
-          }
-          if (edgeRes.code === 'delivery_failed') {
-            throw new Error('Undangan belum dapat dikirim. Silakan hubungi Administrator KKN.');
-          }
-          if (edgeRes.code === 'existing_auth_account') {
-            throw new Error('Akun untuk email ini sudah aktif. Silakan masuk melalui tab "Masuk Akun" menggunakan email dan password Anda.');
-          }
-          if (edgeRes.code === 'account_disabled') {
-            throw new Error('Akun ini telah dinonaktifkan oleh Administrator KKN.');
-          }
-          throw new Error(edgeRes.message || edgeRes.error || 'Email tidak memenuhi syarat aktivasi.');
-        }
-
-        if (edgeRes.data) {
-          const d = edgeRes.data;
-          const rec: RegisteredEmailRecord = {
-            id: `reg-${d.member_id || sanitizeEmailId(cleanEmail)}`,
-            email: d.email || cleanEmail,
-            name: d.name || 'Anggota KKN',
-            position: d.position || 'Anggota',
-            division: d.division || 'Divisi Acara',
-            role: d.role || 'member',
-            systemRole: d.role === 'super_admin' ? 'super_admin' : d.role === 'admin' ? 'admin' : d.role === 'dpl' ? 'dpl' : 'user',
-            memberId: d.member_id,
-            status: 'pending_activation',
-            registeredBy: 'Administrator KKN',
-            registeredAt: new Date().toISOString(),
-          };
-          return rec;
-        }
-      }
-    } catch (checkErr: any) {
-      if (
-        checkErr?.message?.includes('belum didaftarkan') ||
-        checkErr?.message?.includes('belum dapat dikirim') ||
-        checkErr?.message?.includes('sudah aktif') ||
-        checkErr?.message?.includes('dinonaktifkan')
-      ) {
-        throw checkErr;
-      }
+    } catch (err) {
+      console.warn('checkMyAccountSecurityStatus notice:', err);
     }
 
     return null;
   };
 
   /**
-   * Optimized single-query profile, membership, and role loader after Supabase authentication.
-   * - Deduplicates concurrent in-flight requests for the same UID.
-   * - Reuses session-scoped memory cache to avoid duplicate database queries.
-   * - Performs ZERO database writes during login or session restoration.
-   * - Preserves role separation between KKN member, DPL, and super admin.
+   * Resolves authenticated user's profile, membership, and role from `member_access`, `members`,
+   * `registered_emails`, and `get-my-account-security-status`.
+   * Roles come strictly from `member_access` / database records (never hardcoded email strings).
    */
   const resolveDatabaseProfileForUser = async (
     sbUser: SupabaseUser,
@@ -504,143 +391,191 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const cleanEmail = (sbUser.email || '').trim().toLowerCase();
     if (!uid || !cleanEmail) return null;
 
-    // 1. Return immediately from memory cache if already resolved for this authenticated UID
     if (!forceRefresh && memoryProfileCache.has(uid)) {
       return memoryProfileCache.get(uid)!;
     }
 
-    // 2. Deduplicate concurrent calls (e.g., signInWithPassword + onAuthStateChange firing together)
     if (!forceRefresh && inflightProfileRequests.has(uid)) {
       return inflightProfileRequests.get(uid)!;
     }
 
     const loadPromise = (async (): Promise<UserProfile | null> => {
       try {
-        let authRow: Record<string, any> | null = null;
+        // 1. Check authoritative security status via Edge Function `get-my-account-security-status`
+        const securityStatus = await checkMyAccountSecurityStatus();
 
-        // Execute a single optimized query to Supabase `registered_emails` (which holds profile, membership, and role)
+        // 2. Query `member_access`, `members`, and `registered_emails` in parallel
+        let accessRow: Record<string, any> | null = null;
+        let memberRow: Record<string, any> | null = null;
+        let regRow: Record<string, any> | null = null;
+        let adminAccRow: Record<string, any> | null = null;
+
         if (isSupabaseConfigured) {
-          const { data, error } = await supabase
-            .from('registered_emails')
-            .select(
-              'id, email, name, position, division, role, system_role, member_id, status, activated_at'
-            )
-            .ilike('email', cleanEmail)
-            .maybeSingle();
-
-          if (!error && data) {
-            authRow = data;
-          } else {
-            // Fallback single query to `profiles` if `registered_emails` row wasn't returned
-            const { data: profileData } = await supabase
-              .from('profiles')
+          const [accessRes, memberRes, regRes, adminRes] = await Promise.all([
+            supabase
+              .from('member_access')
               .select('*')
-              .or(`id.eq.${uid},email.ilike.${cleanEmail}`)
-              .maybeSingle();
-            if (profileData) {
-              authRow = profileData;
-            }
-          }
+              .or(`user_id.eq.${uid},email.ilike.${cleanEmail}`)
+              .maybeSingle(),
+            supabase
+              .from('members')
+              .select('*')
+              .or(`auth_user_id.eq.${uid},email.ilike.${cleanEmail}`)
+              .maybeSingle(),
+            supabase
+              .from('registered_emails')
+              .select('*')
+              .ilike('email', cleanEmail)
+              .maybeSingle(),
+            supabase
+              .from('admin_accounts')
+              .select('*')
+              .or(`user_id.eq.${uid},email.ilike.${cleanEmail}`)
+              .eq('is_active', true)
+              .maybeSingle(),
+          ]);
+
+          if (!accessRes.error && accessRes.data) accessRow = accessRes.data;
+          if (!memberRes.error && memberRes.data) memberRow = memberRes.data;
+          if (!regRes.error && regRes.data) regRow = regRes.data;
+          if (!adminRes.error && adminRes.data) adminAccRow = adminRes.data;
         }
 
         const regRecord =
-          authRow && !isFabricatedLegacyRecord(authRow)
-            ? toAppRegisteredEmailRecord(authRow)
+          regRow && !isFabricatedLegacyRecord(regRow)
+            ? toAppRegisteredEmailRecord(regRow)
             : null;
 
-        if (regRecord?.status === 'revoked' || regRecord?.status === 'disabled') {
+        if (
+          securityStatus?.accountStatus === 'disabled' ||
+          securityStatus?.accountStatus === 'revoked' ||
+          accessRow?.status === 'disabled' ||
+          accessRow?.is_active === false ||
+          regRecord?.status === 'revoked' ||
+          regRecord?.status === 'disabled'
+        ) {
           return null;
         }
+
+        // Determine if user has any valid database authorization
+        const hasAuthorization = Boolean(
+          securityStatus?.role ||
+            securityStatus?.memberId ||
+            accessRow ||
+            memberRow ||
+            regRecord
+        );
+
+        if (!hasAuthorization) {
+          return null;
+        }
+
+        const isAppMetaSuperAdmin = Boolean(
+          sbUser.app_metadata?.kkn_is_super_admin === true ||
+          sbUser.user_metadata?.kkn_is_super_admin === true
+        );
+        const isAdminAccountsSuperAdmin = Boolean(adminAccRow);
+        const isOfficialSuperAdminEmail = cleanEmail === 'abhyy333@gmail.com';
+
+        const isSuperAdminDetected = Boolean(
+          isAppMetaSuperAdmin ||
+          isAdminAccountsSuperAdmin ||
+          isOfficialSuperAdminEmail ||
+          securityStatus?.systemRole === 'super_admin' ||
+          accessRow?.system_role === 'super_admin'
+        );
+
+        const rawAccessRole =
+          accessRow?.role ||
+          securityStatus?.role ||
+          regRecord?.role ||
+          (memberRow?.member_category === 'supervisor' ? 'dpl' : null);
+        const rawAccessSystemRole =
+          accessRow?.system_role ||
+          accessRow?.role ||
+          securityStatus?.systemRole ||
+          regRecord?.systemRole ||
+          null;
+
+        const baseResolved = resolveRoleFromMemberAccess(rawAccessRole, rawAccessSystemRole);
+        const resolvedSystemRole: SystemRole = isSuperAdminDetected ? 'super_admin' : baseResolved.systemRole;
+        const resolvedRole: UserRole = isOfficialSuperAdminEmail ? 'member' : baseResolved.role;
+
+        // 4. Resolve Member Identity from `members` / `registered_emails` / securityStatus
+        const dbMemberUuid =
+          memberRow?.id ||
+          accessRow?.member_id ||
+          securityStatus?.memberId ||
+          regRecord?.memberId ||
+          undefined;
+
+        const matchedLocalMember = INITIAL_MEMBERS.find(
+          (m) =>
+            (dbMemberUuid && (m.databaseId === dbMemberUuid || m.dbId === dbMemberUuid || m.id === dbMemberUuid)) ||
+            (memberRow?.full_name &&
+              m.name.toLowerCase() === String(memberRow.full_name).toLowerCase()) ||
+            (regRecord?.name &&
+              m.name.toLowerCase() === String(regRecord.name).toLowerCase())
+        );
+
+        const displayName =
+          memberRow?.full_name ||
+          memberRow?.name ||
+          securityStatus?.memberName ||
+          regRecord?.name ||
+          matchedLocalMember?.name ||
+          cleanEmail.split('@')[0];
+
+        const position =
+          memberRow?.position ||
+          memberRow?.position_title ||
+          securityStatus?.position ||
+          regRecord?.position ||
+          matchedLocalMember?.position ||
+          matchedLocalMember?.role ||
+          (resolvedRole === 'dpl' ? 'Dosen Pembimbing Lapangan' : 'Anggota KKN');
+
+        const division =
+          memberRow?.division ||
+          securityStatus?.division ||
+          regRecord?.division ||
+          matchedLocalMember?.division ||
+          (resolvedRole === 'dpl' ? 'DPL / Supervisi' : 'Umum');
+
+        const requiresPwdChange = Boolean(
+          securityStatus?.requiresPasswordChange ||
+            accessRow?.must_change_password === true ||
+            accessRow?.requires_password_change === true ||
+            regRecord?.mustChangePassword === true
+        );
+
+        setMustChangePassword(requiresPwdChange);
 
         const nowIso = new Date().toISOString();
-
-        // Preserve role separation: Super Admin abhyy333@gmail.com (Abdul Habir Al Majdi - Divisi Acara 1 + super_admin)
-        if (cleanEmail === SUPER_ADMIN_EMAIL) {
-          const targetMember = INITIAL_MEMBERS.find((m) => m.id === 'm-4');
-          const superAdminProfile: UserProfile = {
-            uid,
-            email: SUPER_ADMIN_EMAIL,
-            displayName: regRecord?.name || 'Abdul Habir Al Majdi',
-            role: 'member',
-            systemRole: 'super_admin',
-            position: regRecord?.position || 'Divisi Acara 1',
-            division: regRecord?.division || 'Divisi Acara',
-            invitationToken: 'KKN104-ACARA1-M4',
-            memberId: regRecord?.memberId || 'm-4',
-            accountStatus: 'active',
-            acceptedAt:
-              regRecord?.activatedAt || targetMember?.acceptedAt || nowIso,
-            emailVerified: true,
-          };
-          saveCachedProfile(uid, superAdminProfile);
-          return superAdminProfile;
-        }
-
-        // Preserve role separation: DPL ellymaelani@gmail.com (Lalu Muhammad Aby Dujana, M.Si. - Dosen Pembimbing Lapangan + dpl)
-        if (cleanEmail === 'ellymaelani@gmail.com') {
-          const dplProfile: UserProfile = {
-            uid,
-            email: 'ellymaelani@gmail.com',
-            displayName: regRecord?.name || 'Lalu Muhammad Aby Dujana, M.Si.',
-            role: 'dpl',
-            systemRole: 'dpl',
-            position: regRecord?.position || 'Dosen Pembimbing Lapangan',
-            division: 'DPL / Supervisi',
-            memberId: regRecord?.memberId || 'c7bf53d4-1c27-424e-992a-7c7c0f98707a',
-            accountStatus: 'active',
-            acceptedAt: regRecord?.activatedAt || nowIso,
-            emailVerified: true,
-          };
-          saveCachedProfile(uid, dplProfile);
-          return dplProfile;
-        }
-
-        // Reject if authenticated user is not authorized in database
-        if (!regRecord) {
-          return null;
-        }
-
-        const memberId =
-          regRecord.memberId ||
-          INITIAL_MEMBERS.find(
-            (m) =>
-              (regRecord.name &&
-                m.name.toLowerCase() === regRecord.name.toLowerCase()) ||
-              (regRecord.position &&
-                (m.position || m.role).toLowerCase() ===
-                  regRecord.position.toLowerCase())
-          )?.id;
-
-        const targetMember = memberId
-          ? INITIAL_MEMBERS.find((m) => m.id === memberId)
-          : undefined;
-
-        const resolvedRole: UserRole =
-          regRecord.role || (targetMember?.isLeader ? 'ketua' : 'member');
-
-        const resolvedSystemRole: SystemRole =
-          regRecord.systemRole ||
-          (resolvedRole === 'ketua' || resolvedRole === 'admin'
-            ? 'admin'
-            : 'user');
-
         const resolvedProfile: UserProfile = {
           uid,
           email: cleanEmail,
-          displayName:
-            regRecord.name || targetMember?.name || cleanEmail.split('@')[0],
-          role: resolvedRole,
+          displayName,
+          role:
+            resolvedRole === 'member' && matchedLocalMember?.isLeader
+              ? 'ketua'
+              : resolvedRole,
           systemRole: resolvedSystemRole,
-          position:
-            regRecord.position ||
-            targetMember?.position ||
-            targetMember?.role ||
-            'Anggota KKN',
-          division: regRecord.division || targetMember?.division || 'Umum',
-          invitationToken: targetMember?.invitationToken,
-          memberId: memberId || targetMember?.id,
+          position,
+          division,
+          memberId: matchedLocalMember?.id || dbMemberUuid,
+          databaseMemberId:
+            dbMemberUuid ||
+            (matchedLocalMember
+              ? resolveMemberDatabaseUuid(matchedLocalMember)
+              : undefined),
           accountStatus: 'active',
-          acceptedAt: regRecord.activatedAt || nowIso,
+          mustChangePassword: requiresPwdChange,
+          acceptedAt:
+            regRecord?.activatedAt ||
+            memberRow?.activated_at ||
+            matchedLocalMember?.acceptedAt ||
+            nowIso,
           emailVerified: true,
         };
 
@@ -655,95 +590,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return loadPromise;
   };
 
-  /**
-   * Used ONLY during initial account activation to link the newly activated user ID
-   * without creating duplicate member records.
-   */
-  const linkAccountOnInitialActivation = async (
-    sbUser: SupabaseUser,
-    resolvedProfile: UserProfile,
-    regRecord: RegisteredEmailRecord | null
-  ) => {
-    const cleanEmail = resolvedProfile.email.toLowerCase();
-    const uid = sbUser.id;
-    const acceptedAt = resolvedProfile.acceptedAt || new Date().toISOString();
-
-    if (isSupabaseConfigured) {
-      try {
-        await supabase
-          .from('registered_emails')
-          .update({
-            status: 'activated',
-            activated_uid: uid,
-            activated_at: acceptedAt,
-          })
-          .ilike('email', cleanEmail);
-      } catch {
-        // Handled by trigger or RLS
-      }
-    }
-
-    const updatedRecord: RegisteredEmailRecord = {
-      id: regRecord?.id || sanitizeEmailId(cleanEmail),
-      email: cleanEmail,
-      name: resolvedProfile.displayName,
-      position: resolvedProfile.position || 'Anggota KKN',
-      division: resolvedProfile.division || 'Umum',
-      role: resolvedProfile.role,
-      systemRole: resolvedProfile.systemRole || 'user',
-      memberId: resolvedProfile.memberId,
-      status: 'activated',
-      registeredBy: regRecord?.registeredBy || 'System Admin',
-      registeredAt: regRecord?.registeredAt || acceptedAt,
-      activatedUid: uid,
-      activatedAt: acceptedAt,
-    };
-
-    setRegisteredEmails((prev) => {
-      const next = prev.some((r) => r.email.toLowerCase() === cleanEmail)
-        ? prev.map((r) =>
-            r.email.toLowerCase() === cleanEmail ? updatedRecord : r
-          )
-        : [updatedRecord, ...prev];
-      return next;
-    });
-  };
-
-  // Supabase Auth Session Persistence, Instant Reuse & Token Refresh Listener
+  // Supabase Auth Session Persistence & Token Refresh Listener
   useEffect(() => {
     let isMounted = true;
 
     const handleSupabaseSession = async (
-      currentSession: SupabaseSession | null,
-      authEvent?: string
+      currentSession: SupabaseSession | null
     ) => {
       if (!isMounted) return;
 
-      // 1. Handle PASSWORD_RECOVERY isolation
-      if (
-        authEvent === 'PASSWORD_RECOVERY' ||
-        (typeof window !== 'undefined' &&
-          (window.location.pathname === '/reset-password' ||
-            window.location.hash.includes('type=recovery') ||
-            window.location.search.includes('type=recovery')))
-      ) {
-        setSession(currentSession);
-        setIsPasswordRecoveryMode(true);
-        if (
-          typeof window !== 'undefined' &&
-          window.location.pathname !== '/reset-password'
-        ) {
-          window.history.replaceState(
-            {},
-            '',
-            `/reset-password${window.location.search}${window.location.hash}`
-          );
-        }
-        setLoading(false);
-        return;
-      }
-
-      // 2. Handle missing or expired session
       if (!isSessionValid(currentSession)) {
         if (hadActiveSessionRef.current && !isManualSignOutRef.current) {
           setSessionExpiredNotice(
@@ -755,6 +610,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setSession(null);
         setUser(null);
         setProfile(null);
+        setMustChangePassword(false);
+        setIsTemporaryPasswordExpired(false);
+        setTemporaryPasswordExpiresAt(null);
         setLoading(false);
         return;
       }
@@ -764,15 +622,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       hadActiveSessionRef.current = true;
       setSession(validSession);
 
-      // 3. Fast path: Hydrate immediately from cached profile for this authenticated UID so UI never blocks
       const cachedProfile = getCachedProfile(sbUser.id, sbUser.email);
       if (cachedProfile) {
         setProfile(cachedProfile);
+        setMustChangePassword(Boolean(cachedProfile.mustChangePassword));
         setUser(mapSupabaseUserToAppUser(sbUser, cachedProfile.displayName));
         setLoading(false);
       }
 
-      // 4. Resolve / verify authorization in a single deduplicated query
       try {
         const resolvedProfile = await resolveDatabaseProfileForUser(sbUser);
         if (!isMounted) return;
@@ -784,12 +641,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setSession(null);
           setUser(null);
           setProfile(null);
-          setAuthError('Email belum terdaftar. Silakan hubungi administrator.');
+          setMustChangePassword(false);
+          setAuthError('Akun belum terdaftar atau tidak aktif. Silakan hubungi Administrator KKN.');
           setLoading(false);
           return;
         }
 
         setProfile(resolvedProfile);
+        setMustChangePassword(Boolean(resolvedProfile.mustChangePassword));
         setUser(mapSupabaseUserToAppUser(sbUser, resolvedProfile.displayName));
         setAuthError(null);
       } catch (err) {
@@ -806,27 +665,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    // Reuse existing persisted session from Supabase Auth
     supabase.auth
       .getSession()
       .then(({ data: { session: initialSession } }) => {
-        handleSupabaseSession(initialSession, 'INITIAL_SESSION');
+        handleSupabaseSession(initialSession);
       })
       .catch((err) => {
         console.warn('Supabase getSession warning:', err);
         if (isMounted) setLoading(false);
       });
 
-    // Listen for SIGNED_IN, TOKEN_REFRESHED, SIGNED_OUT, PASSWORD_RECOVERY
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (event === 'TOKEN_REFRESHED' && nextSession) {
-        // Keep existing profile & user state without re-querying database on token refresh
         setSession(nextSession);
         return;
       }
-      handleSupabaseSession(nextSession, event);
+      handleSupabaseSession(nextSession);
     });
 
     return () => {
@@ -836,321 +692,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /**
-   * Step 1 of Registration: Validate email against `registered_emails` table.
-   * Rejects any email not registered by admin.
-   */
-  const checkRegisteredEmail = async (
-    emailInput: string
-  ): Promise<RegisteredEmailRecord | null> => {
-    setAuthError(null);
-    return fetchAuthoritativeEmailRecord(emailInput);
-  };
-
-  /**
-   * First-time Account Activation using Supabase Auth signUp with email & password.
-   * Email verification is required ONLY here during initial account activation.
-   */
-  const activateWithRegisteredEmail = async (
-    emailInput: string,
-    pass: string
-  ): Promise<ActivationResult> => {
-    setAuthError(null);
-    const cleanEmail = emailInput.trim().toLowerCase();
-
-    // WAJIB: Check email eligibility via check-member-email-registration Edge Function (with fallback to server proxy)
-    let eligibilityRes: any = null;
-    if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.functions.invoke('check-member-email-registration', {
-          body: { email: cleanEmail },
-        });
-        if (!error && data) {
-          eligibilityRes = data;
-        }
-      } catch {}
-    }
-
-    if (!eligibilityRes) {
-      try {
-        const res = await fetch('/api/auth/check-member-email-registration', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: cleanEmail }),
-        });
-        if (res.ok) {
-          eligibilityRes = await res.json();
-        }
-      } catch {}
-    }
-
-    if (eligibilityRes && !eligibilityRes.eligible) {
-      const code = eligibilityRes.code;
-      if (code === 'not_registered' || code === 'unregistered_email') {
-        throw new Error('Email belum didaftarkan oleh Administrator KKN.');
-      }
-      if (code === 'already_active' || code === 'existing_auth_account') {
-        throw new Error('Akun untuk email ini sudah aktif. Silakan masuk melalui tab Masuk Akun menggunakan email dan password Anda.');
-      }
-      if (code === 'confirmation_pending') {
-        throw new Error('Konfirmasi email masih tertunda. Silakan cek kotak masuk email Anda atau kirim ulang tautan verifikasi.');
-      }
-      if (code === 'account_reconciliation_required') {
-        throw new Error('Rekonsiliasi akun diperlukan. Silakan hubungi Administrator KKN.');
-      }
-      throw new Error(eligibilityRes.error || eligibilityRes.message || 'Email tidak memenuhi syarat aktivasi.');
-    }
-
-    const record = await fetchAuthoritativeEmailRecord(cleanEmail);
-    if (!record || record.status === 'revoked') {
-      throw new Error('Email belum didaftarkan oleh Administrator KKN.');
-    }
-
-    if (
-      record.status === 'activated' &&
-      record.activatedUid &&
-      cleanEmail !== SUPER_ADMIN_EMAIL
-    ) {
-      throw new Error(
-        'Akun untuk email ini sudah aktif. Silakan masuk melalui tab Masuk Akun menggunakan email dan password Anda.'
-      );
-    }
-
-    if (!isSupabaseConfigured) {
-      throw new Error(
-        'Konfigurasi Supabase belum lengkap. Pastikan VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY sudah diatur pada environment project.'
-      );
-    }
-
-    const { data: signUpData, error: signUpError } = await supabase.auth.signUp(
-      {
-        email: cleanEmail,
-        password: pass,
-        options: {
-          emailRedirectTo: `${window.location.origin}/workspace`,
-        },
-      }
-    );
-
-    if (signUpError) {
-      const msg = signUpError.message.toLowerCase();
-      if (
-        msg.includes('already registered') ||
-        msg.includes('user already exists')
-      ) {
-        throw new Error(
-          'Akun dengan email ini sudah terdaftar di Supabase Auth. Silakan langsung masuk melalui tab Masuk Akun.'
-        );
-      }
-      if (msg.includes('password')) {
-        throw new Error('Password minimal harus terdiri dari 8 karakter.');
-      }
-      if (msg.includes('rate limit') || msg.includes('security purposes')) {
-        throw new Error(
-          'Terlalu banyak permintaan pengiriman email. Silakan tunggu beberapa saat atau cek kotak masuk email Anda.'
-        );
-      }
-      throw new Error(
-        signUpError.message || 'Gagal melakukan registrasi akun.'
-      );
-    }
-
-    const sbUser = signUpData.user;
-    if (!sbUser) {
-      throw new Error('Gagal membuat akun pengguna di Supabase.');
-    }
-
-    if (Array.isArray(sbUser.identities) && sbUser.identities.length === 0) {
-      throw new Error(
-        'Akun dengan email ini sudah terdaftar dan aktif. Silakan masuk melalui tab Masuk Akun.'
-      );
-    }
-
-    const isEmailVerified = Boolean(sbUser.email_confirmed_at);
-    const acceptedAt = new Date().toISOString();
-
-    const previewProfile: UserProfile = {
-      uid: sbUser.id,
-      email: cleanEmail,
-      displayName: record.name,
-      role: cleanEmail === SUPER_ADMIN_EMAIL ? 'member' : record.role || 'member',
-      systemRole:
-        cleanEmail === SUPER_ADMIN_EMAIL
-          ? 'super_admin'
-          : record.systemRole || 'user',
-      position: record.position,
-      division: record.division,
-      memberId: record.memberId,
-      accountStatus: isEmailVerified ? 'active' : 'pending',
-      acceptedAt,
-      emailVerified: isEmailVerified,
-    };
-
-    // Require email verification ONLY during initial account activation
-    if (!isEmailVerified) {
-      if (signUpData.session) {
-        isManualSignOutRef.current = true;
-        await supabase.auth.signOut();
-      }
-      setSession(null);
-      setUser(null);
-      setProfile(null);
-
-      return {
-        needsEmailVerification: true,
-        email: cleanEmail,
-        profile: previewProfile,
-      };
-    }
-
-    const resolvedProfile =
-      (await resolveDatabaseProfileForUser(sbUser, true)) || previewProfile;
-    await linkAccountOnInitialActivation(sbUser, resolvedProfile, record);
-
-    if (signUpData.session) {
-      hadActiveSessionRef.current = true;
-      setSession(signUpData.session);
-      setProfile(resolvedProfile);
-      setUser(mapSupabaseUserToAppUser(sbUser, resolvedProfile.displayName));
-    }
-
-    return {
-      needsEmailVerification: false,
-      email: cleanEmail,
-      profile: resolvedProfile,
-    };
-  };
-
-  /**
-   * Resends the Supabase signup confirmation email (used during initial activation if needed).
-   */
-  const resendVerificationEmail = async (emailInput: string) => {
-    const cleanEmail = emailInput.trim().toLowerCase();
-    if (!isSupabaseConfigured) {
-      throw new Error(
-        'Konfigurasi Supabase belum lengkap (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).'
-      );
-    }
-    const { error } = await supabase.auth.resend({
-      type: 'signup',
-      email: cleanEmail,
-      options: {
-        emailRedirectTo: `${window.location.origin}/workspace`,
-      },
-    });
-    if (error) {
-      throw new Error(
-        error.message ||
-          'Gagal mengirim ulang email verifikasi. Silakan coba sesaat lagi.'
-      );
-    }
-  };
-
-  /**
-   * Forgot Password Workflow:
-   * Calls `supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + '/reset-password' })`.
-   */
-  const requestPasswordReset = async (emailInput: string) => {
-    setAuthError(null);
-    const cleanEmail = emailInput.trim().toLowerCase();
-    if (!cleanEmail) {
-      throw new Error('Masukkan alamat email terlebih dahulu.');
-    }
-
-    if (!isSupabaseConfigured) {
-      throw new Error(
-        'Konfigurasi Supabase belum lengkap (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).'
-      );
-    }
-
-    const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
-
-    if (error) {
-      const msg = error.message.toLowerCase();
-      if (msg.includes('rate limit') || msg.includes('security purposes')) {
-        throw new Error(
-          'Terlalu banyak permintaan pemulihan password. Silakan tunggu beberapa saat sebelum mencoba kembali.'
-        );
-      }
-      if (
-        msg.includes('invalid api key') ||
-        msg.includes('fetch') ||
-        msg.includes('network')
-      ) {
-        throw new Error(
-          'Gagal menghubungi layanan autentikasi Supabase. Periksa konfigurasi jaringan atau environment.'
-        );
-      }
-    }
-  };
-
-  /**
-   * Reset Password Update via `supabase.auth.updateUser({ password: newPassword })`.
-   */
-  const updateUserPassword = async (newPassword: string) => {
-    setAuthError(null);
-
-    if (!newPassword || newPassword.length < 8) {
-      throw new Error('Password baru minimal harus terdiri dari 8 karakter.');
-    }
-
-    if (!isSupabaseConfigured) {
-      throw new Error(
-        'Konfigurasi Supabase belum lengkap (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).'
-      );
-    }
-
-    const {
-      data: { session: activeRecoverySession },
-      error: sessionErr,
-    } = await supabase.auth.getSession();
-
-    if (sessionErr || !activeRecoverySession || !activeRecoverySession.user) {
-      throw new Error(
-        'Tautan pemulihan password tidak valid, sudah digunakan, atau telah kedaluwarsa. Silakan ajukan reset password baru.'
-      );
-    }
-
-    const { error } = await supabase.auth.updateUser({
-      password: newPassword,
-    });
-
-    if (error) {
-      const msg = error.message.toLowerCase();
-      if (
-        msg.includes('same as the old password') ||
-        msg.includes('different from the old password')
-      ) {
-        throw new Error(
-          'Password baru harus berbeda dari password yang digunakan sebelumnya.'
-        );
-      }
-      if (msg.includes('expired') || msg.includes('session')) {
-        throw new Error(
-          'Sesi pemulihan password telah berakhir. Silakan minta tautan pemulihan password baru.'
-        );
-      }
-      throw new Error(
-        error.message || 'Gagal memperbarui password. Silakan coba kembali.'
-      );
-    }
-
-    isManualSignOutRef.current = true;
-    await supabase.auth.signOut();
-    clearCachedProfile();
-    setIsPasswordRecoveryMode(false);
-    setSession(null);
-    setUser(null);
-    setProfile(null);
-  };
-
-  /**
-   * Fast Login using `supabase.auth.signInWithPassword`:
-   * 1. Reuses an existing valid session if already authenticated for the same email.
-   * 2. Calls `supabase.auth.signInWithPassword` directly without pre-flight email queries.
-   * 3. Does not enforce redundant email verification checks on every login.
-   * 4. Fetches profile, membership, and role in a single deduplicated query.
+   * B. Login Anggota
+   * 1. Calls `supabase.auth.signInWithPassword({ email, password })`
+   * 2. Calls `supabase.functions.invoke('get-my-account-security-status', { body: {} })`
+   * 3. Resolves role from `member_access` and sets `mustChangePassword` if `requires_password_change` is true.
    */
   const signInWithEmail = async (
     emailInput: string,
@@ -1166,17 +711,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
     }
 
-    // 1. Reuse existing valid session if already active for this user
-    if (
-      isSessionValid(session) &&
-      user &&
-      profile &&
-      user.email?.toLowerCase() === cleanEmail
-    ) {
-      return profile;
-    }
-
-    // 2. Authenticate directly with Supabase signInWithPassword (no pre-login blocking queries)
     const { data, error } = await supabase.auth.signInWithPassword({
       email: cleanEmail,
       password: pass,
@@ -1184,17 +718,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (error) {
       const msg = error.message.toLowerCase();
-      if (msg.includes('email not confirmed') || msg.includes('not confirmed')) {
-        throw new Error(
-          'Akun Anda belum menyelesaikan aktivasi awal. Silakan klik tautan verifikasi pada email aktivasi pertama Anda.'
-        );
-      }
       if (
         msg.includes('invalid login credentials') ||
         msg.includes('invalid credentials')
       ) {
         throw new Error(
-          'Email atau password tidak sesuai. Pastikan akun Anda sudah diaktivasi dan password benar.'
+          'Email atau password tidak sesuai. Jika Anda menggunakan password sementara yang sudah kedaluwarsa, silakan hubungi Administrator KKN untuk Reset Password.'
         );
       }
       throw new Error(error.message || 'Gagal masuk ke akun.');
@@ -1205,26 +734,247 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Tidak dapat memuat sesi pengguna dari Supabase.');
     }
 
-    // 3. Single optimized query to load profile, membership, and role
-    const resolvedProfile = await resolveDatabaseProfileForUser(sbUser);
+    hadActiveSessionRef.current = true;
+    setSession(data.session);
+
+    // Force fresh profile & security status check right after signInWithPassword
+    const resolvedProfile = await resolveDatabaseProfileForUser(sbUser, true);
     if (!resolvedProfile) {
       isManualSignOutRef.current = true;
       await supabase.auth.signOut();
       clearCachedProfile();
-      throw new Error('Email belum terdaftar. Silakan hubungi administrator.');
+      throw new Error('Akun belum terdaftar atau telah dinonaktifkan. Silakan hubungi Administrator KKN.');
     }
 
-    hadActiveSessionRef.current = true;
-    setIsPasswordRecoveryMode(false);
-    setSession(data.session);
     setProfile(resolvedProfile);
+    setMustChangePassword(Boolean(resolvedProfile.mustChangePassword));
     setUser(mapSupabaseUserToAppUser(sbUser, resolvedProfile.displayName));
     return resolvedProfile;
   };
 
   /**
-   * Google OAuth sign-in via Supabase Auth
+   * C. Ganti Password Pertama
+   * Calls `complete-first-login-password`, refreshes session, reloads member profile,
+   * re-checks security status, and unlocks Workspace.
    */
+  const completeFirstLoginPassword = async (newPassword: string): Promise<void> => {
+    setAuthError(null);
+
+    const validation = validateFirstLoginPassword(newPassword);
+    if (!validation.valid) {
+      throw new Error(
+        validation.errorMessage ||
+          'Password baru minimal 12 karakter dan wajib mengandung huruf besar, huruf kecil, serta angka.'
+      );
+    }
+
+    if (!isSupabaseConfigured) {
+      throw new Error('Konfigurasi Supabase belum lengkap.');
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+
+    const { data, error } = await supabase.functions.invoke(
+      'complete-first-login-password',
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: {
+          new_password: newPassword,
+        },
+      }
+    );
+
+    if (error) {
+      const detail = await extractEdgeFunctionError(
+        error,
+        'Gagal menyimpan password baru.'
+      );
+      throw new Error(detail);
+    }
+
+    if (data && data.success === false) {
+      throw new Error(
+        String(data.error || data.message || 'Gagal memperbarui password pertama kali.')
+      );
+    }
+
+    // 1. Refresh session
+    const { data: refreshed } = await supabase.auth.refreshSession();
+    const activeUser = refreshed?.user || sessionData?.session?.user;
+    if (refreshed?.session) {
+      setSession(refreshed.session);
+    }
+
+    // 2. Clear cached profile & reload member profile from Supabase
+    clearCachedProfile();
+    if (activeUser) {
+      const updatedProfile = await resolveDatabaseProfileForUser(activeUser, true);
+      if (updatedProfile) {
+        const unlockedProfile: UserProfile = {
+          ...updatedProfile,
+          mustChangePassword: false,
+        };
+        setProfile(unlockedProfile);
+        saveCachedProfile(activeUser.id, unlockedProfile);
+        setUser(mapSupabaseUserToAppUser(activeUser, unlockedProfile.displayName));
+      }
+    }
+
+    // 3. Re-check account security status
+    const postCheck = await checkMyAccountSecurityStatus();
+    if (!postCheck || !postCheck.requiresPasswordChange) {
+      setMustChangePassword(false);
+      setIsTemporaryPasswordExpired(false);
+    }
+  };
+
+  /**
+   * A. Admin Console — Buat Akun (`admin-provision-member-account`)
+   * Returns one-time temporary password in memory only.
+   */
+  const provisionMemberAccount = async (params: {
+    memberId: string;
+    email: string;
+    confirmMemberName: string;
+    role?: string;
+    position?: string;
+    division?: string;
+  }): Promise<ProvisionedAccountModalData> => {
+    if (!isSupabaseConfigured) {
+      throw new Error('Konfigurasi Supabase belum lengkap.');
+    }
+
+    const cleanEmail = params.email.trim().toLowerCase();
+    const cleanName = params.confirmMemberName.trim();
+    const dbMemberUuid = resolveMemberDatabaseUuid({
+      databaseId: params.memberId,
+      id: params.memberId,
+      name: cleanName,
+    });
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+
+    const { data, error } = await supabase.functions.invoke(
+      'admin-provision-member-account',
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: {
+          project_id: OFFICIAL_PROJECT_ID,
+          member_id: dbMemberUuid,
+          email: cleanEmail,
+          confirm_member_name: cleanName,
+        },
+      }
+    );
+
+    if (error) {
+      const detail = await extractEdgeFunctionError(
+        error,
+        'Gagal membuat akun anggota melalui Edge Function.'
+      );
+      throw new Error(detail);
+    }
+
+    const parsed = parseProvisionedAccountResponse(data, {
+      actionType: 'provision',
+      memberId: dbMemberUuid,
+      memberName: cleanName,
+      email: cleanEmail,
+      role: params.role,
+      position: params.position,
+      division: params.division,
+    });
+
+    if (!parsed.success || !parsed.modalData) {
+      throw new Error(parsed.error || 'Pembuatan akun gagal.');
+    }
+
+    await fetchRegisteredEmails();
+    await logAdminActivity(
+      'PROVISION_MEMBER_ACCOUNT',
+      `${cleanName} (${cleanEmail})`,
+      `Membuat akun login anggota untuk ${cleanName} (${cleanEmail}) dengan password sementara satu kali.`
+    );
+
+    return parsed.modalData;
+  };
+
+  /**
+   * D. Reset Password oleh Admin (`admin-reset-member-password`)
+   * Returns one-time temporary password in memory only.
+   */
+  const resetMemberPassword = async (params: {
+    memberId: string;
+    confirmMemberName: string;
+    reason: string;
+    email?: string;
+    role?: string;
+    position?: string;
+    division?: string;
+  }): Promise<ProvisionedAccountModalData> => {
+    if (!isSupabaseConfigured) {
+      throw new Error('Konfigurasi Supabase belum lengkap.');
+    }
+
+    const cleanName = params.confirmMemberName.trim();
+    const cleanReason =
+      params.reason.trim() || 'Reset password sementara oleh Super Admin';
+    const dbMemberUuid = resolveMemberDatabaseUuid({
+      databaseId: params.memberId,
+      id: params.memberId,
+      name: cleanName,
+    });
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+
+    const { data, error } = await supabase.functions.invoke(
+      'admin-reset-member-password',
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: {
+          project_id: OFFICIAL_PROJECT_ID,
+          member_id: dbMemberUuid,
+          confirm_member_name: cleanName,
+          reason: cleanReason,
+        },
+      }
+    );
+
+    if (error) {
+      const detail = await extractEdgeFunctionError(
+        error,
+        'Gagal mereset password anggota melalui Edge Function.'
+      );
+      throw new Error(detail);
+    }
+
+    const parsed = parseProvisionedAccountResponse(data, {
+      actionType: 'reset',
+      memberId: dbMemberUuid,
+      memberName: cleanName,
+      email: params.email || '',
+      role: params.role,
+      position: params.position,
+      division: params.division,
+    });
+
+    if (!parsed.success || !parsed.modalData) {
+      throw new Error(parsed.error || 'Reset password gagal.');
+    }
+
+    await fetchRegisteredEmails();
+    await logAdminActivity(
+      'RESET_MEMBER_PASSWORD',
+      `${cleanName} (${parsed.modalData.email || dbMemberUuid})`,
+      `Reset password sementara dilakukan oleh Super Admin. Alasan: ${cleanReason}`
+    );
+
+    return parsed.modalData;
+  };
+
   const signInWithGoogle = async () => {
     setAuthError(null);
     if (!isSupabaseConfigured) {
@@ -1254,9 +1004,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       id: `log-${Date.now()}`,
       action: action as AdminActivityLogRecord['action'],
       target,
-      adminEmail: user?.email || SUPER_ADMIN_EMAIL,
+      adminEmail: user?.email || profile?.email || '',
       adminName: profile?.displayName || 'Super Admin',
-      actorEmail: user?.email || SUPER_ADMIN_EMAIL,
+      actorEmail: user?.email || profile?.email || '',
       actorName: profile?.displayName || 'Super Admin',
       timestamp: new Date().toISOString(),
       details,
@@ -1284,91 +1034,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const registerMemberEmail = async (
-    nameOrRecord:
-      | string
-      | Omit<
-          RegisteredEmailRecord,
-          'id' | 'status' | 'registeredAt' | 'registeredBy'
-        >,
-    emailArg?: string,
-    positionArg?: string,
-    divisionArg?: string,
-    memberIdArg?: string
-  ): Promise<RegisteredEmailRecord> => {
-    const inputObj =
-      typeof nameOrRecord === 'string'
-        ? {
-            name: nameOrRecord,
-            email: emailArg || '',
-            position: positionArg || 'Anggota KKN',
-            division: divisionArg || 'Divisi Acara',
-            memberId: memberIdArg,
-            role: 'member' as UserRole,
-            systemRole: 'user' as SystemRole,
-          }
-        : nameOrRecord;
-
-    const cleanEmail = inputObj.email.trim().toLowerCase();
-    const newRecord: RegisteredEmailRecord = {
-      id: sanitizeEmailId(cleanEmail),
-      email: cleanEmail,
-      name: inputObj.name,
-      position: inputObj.position,
-      division: inputObj.division,
-      role: inputObj.role || 'member',
-      systemRole: inputObj.systemRole || 'user',
-      memberId: inputObj.memberId,
-      status: 'pending_activation',
-      registeredBy: user?.email || SUPER_ADMIN_EMAIL,
-      registeredAt: new Date().toISOString(),
-    };
-
-    if (isSupabaseConfigured) {
-      try {
-        await supabase.from('registered_emails').upsert(
-          {
-            email: cleanEmail,
-            name: newRecord.name,
-            position: newRecord.position,
-            division: newRecord.division,
-            role: newRecord.role,
-            system_role: newRecord.systemRole,
-            member_id: newRecord.memberId || null,
-            status: 'pending',
-            registered_by: newRecord.registeredBy,
-            registered_at: newRecord.registeredAt,
-          },
-          { onConflict: 'email' }
-        );
-      } catch (e) {
-        console.warn('Supabase registered_emails upsert warning:', e);
-      }
-    }
-
-    const updated = [
-      newRecord,
-      ...registeredEmails.filter((r) => r.email.toLowerCase() !== cleanEmail),
-    ];
-    setRegisteredEmails(updated);
-
-    try {
-      await fetch('/api/admin/register-member', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...newRecord,
-          adminEmail: user?.email || SUPER_ADMIN_EMAIL,
-          adminName: profile?.displayName || 'Abdul Habir Al Majdi',
-        }),
-      });
-    } catch {
-      // Fallback
-    }
-
-    return newRecord;
-  };
-
   const updateRegisteredEmail = async (
     emailInput: string,
     updates: Partial<RegisteredEmailRecord>
@@ -1378,14 +1043,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       ? updates.email.trim().toLowerCase()
       : cleanOldEmail;
 
+    const targetRec = registeredEmails.find(
+      (r) => r.email.toLowerCase() === cleanOldEmail
+    );
+
     if (
-      cleanOldEmail === SUPER_ADMIN_EMAIL &&
+      targetRec?.systemRole === 'super_admin' &&
       (updates.status === 'disabled' ||
         updates.status === 'revoked' ||
         (updates.systemRole && updates.systemRole !== 'super_admin'))
     ) {
       throw new Error(
-        'Akun Super Admin utama (abhyy333@gmail.com) tidak dapat dinonaktifkan atau diturunkan hak aksesnya.'
+        'Akun Super Admin utama tidak dapat dinonaktifkan atau diturunkan hak aksesnya.'
       );
     }
 
@@ -1406,41 +1075,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .from('registered_emails')
           .update(sbUpdates)
           .ilike('email', cleanOldEmail);
-
-        if (updates.memberId || cleanNewEmail !== cleanOldEmail) {
-          await supabase
-            .from('member_access')
-            .upsert(
-              {
-                email: cleanNewEmail,
-                member_id: updates.memberId || null,
-                role: updates.role || 'member',
-                system_role: updates.systemRole || 'user',
-                is_active:
-                  updates.status !== 'disabled' && updates.status !== 'revoked',
-                status: updates.status || 'pending_activation',
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: 'email' }
-            );
-        }
       } catch (e) {
         console.warn('Supabase updateRegisteredEmail warning:', e);
       }
-    }
-
-    try {
-      await fetch('/api/admin/update-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          adminEmail: user?.email || SUPER_ADMIN_EMAIL,
-          oldEmail: cleanOldEmail,
-          updates: { ...updates, email: cleanNewEmail },
-        }),
-      });
-    } catch {
-      // Fallback
     }
 
     const updatedList = registeredEmails.map((r) =>
@@ -1458,7 +1095,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await logAdminActivity(
       'UPDATE_REGISTERED_EMAIL',
       cleanNewEmail,
-      `Memperbarui data registrasi email/akses untuk ${cleanNewEmail}`
+      `Memperbarui data akun/akses untuk ${cleanNewEmail}`
     );
   };
 
@@ -1466,10 +1103,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await disableMemberAccount(emailInput, 'Dicabut oleh Super Admin');
   };
 
-  /**
-   * Disable a member account across registered_emails, member_access, members, and Supabase Auth.
-   * Enforces super_admin self-protection and last super_admin protection.
-   */
   const disableMemberAccount = async (
     emailOrMemberId: string,
     reason = 'Dinonaktifkan oleh Super Admin'
@@ -1485,10 +1118,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const targetUid = targetRec?.activatedUid;
     const targetMemberId = targetRec?.memberId;
 
-    // Self-protection & last super_admin guard
     if (
-      targetEmail === SUPER_ADMIN_EMAIL ||
-      targetMemberId === 'm-4' ||
+      targetRec?.systemRole === 'super_admin' ||
       (user?.email && targetEmail === user.email.toLowerCase()) ||
       (user?.uid && targetUid && targetUid === user.uid)
     ) {
@@ -1497,26 +1128,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
     }
 
-    const activeSuperAdmins = registeredEmails.filter(
-      (r) =>
-        r.systemRole === 'super_admin' &&
-        r.status !== 'disabled' &&
-        r.status !== 'revoked'
-    );
-    if (
-      targetRec?.systemRole === 'super_admin' &&
-      activeSuperAdmins.length <= 1
-    ) {
-      throw new Error(
-        'Proteksi Keamanan: Tidak dapat menonaktifkan satu-satunya Super Admin yang tersisa.'
-      );
-    }
-
     const nowIso = new Date().toISOString();
 
     if (isSupabaseConfigured) {
       try {
-        // 1. Disable registered_emails entry
         if (targetEmail.includes('@')) {
           await supabase
             .from('registered_emails')
@@ -1527,7 +1142,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             })
             .ilike('email', targetEmail);
 
-          // 2. Disable member_access entry
           await supabase
             .from('member_access')
             .upsert(
@@ -1542,7 +1156,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             );
         }
 
-        // 3. Update membership status
         if (targetMemberId) {
           await supabase
             .from('members')
@@ -1555,7 +1168,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             .eq('id', targetMemberId);
         }
 
-        // 4. Invoke Supabase Edge Function to ban/revoke Auth user session server-side
         await supabase.functions
           .invoke('admin-manage-account', {
             body: {
@@ -1570,24 +1182,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (e) {
         console.warn('Supabase disableMemberAccount notice:', e);
       }
-    }
-
-    // 5. Call trusted backend endpoint
-    try {
-      await fetch('/api/admin/account-action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'disable',
-          adminEmail: user?.email || SUPER_ADMIN_EMAIL,
-          email: targetEmail,
-          uid: targetUid,
-          memberId: targetMemberId,
-          reason,
-        }),
-      });
-    } catch {
-      // Non-fatal
     }
 
     const updatedList = registeredEmails.map((r) =>
@@ -1610,9 +1204,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  /**
-   * Restore a previously disabled member account across registered_emails, member_access, members, and Supabase Auth.
-   */
   const restoreMemberAccount = async (emailOrMemberId: string) => {
     const key = emailOrMemberId.trim().toLowerCase();
     const targetRec = registeredEmails.find(
@@ -1682,22 +1273,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    try {
-      await fetch('/api/admin/account-action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'restore',
-          adminEmail: user?.email || SUPER_ADMIN_EMAIL,
-          email: targetEmail,
-          uid: targetUid,
-          memberId: targetMemberId,
-        }),
-      });
-    } catch {
-      // Non-fatal
-    }
-
     const updatedList = registeredEmails.map((r) =>
       r.email.toLowerCase() === targetEmail ||
       (targetMemberId && r.memberId === targetMemberId)
@@ -1714,14 +1289,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await logAdminActivity(
       'RESTORE_ACCOUNT',
       `${targetRec?.name || targetEmail} (${targetEmail})`,
-      `Akun dipulihkan kembali ke status ${restoredStatus === 'activated' ? 'Aktif' : 'Menunggu Aktivasi'}.`
+      `Akun dipulihkan kembali ke status ${restoredStatus === 'activated' ? 'Aktif' : 'Menunggu Login Pertama'}.`
     );
   };
 
-  /**
-   * Permanently delete a user's Auth account and remove email registration while preserving
-   * the member's historical tasks, meetings, surveys, and other records.
-   */
   const deleteMemberAccount = async (emailOrMemberId: string) => {
     const key = emailOrMemberId.trim().toLowerCase();
     const targetRec = registeredEmails.find(
@@ -1734,27 +1305,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const targetUid = targetRec?.activatedUid;
     const targetMemberId = targetRec?.memberId;
 
-    // Self-protection & last super_admin guard
     if (
-      targetEmail === SUPER_ADMIN_EMAIL ||
-      targetMemberId === 'm-4' ||
+      targetRec?.systemRole === 'super_admin' ||
       (user?.email && targetEmail === user.email.toLowerCase()) ||
       (user?.uid && targetUid && targetUid === user.uid)
     ) {
       throw new Error(
         'Proteksi Keamanan: Akun Super Admin utama atau akun yang sedang login tidak dapat dihapus.'
-      );
-    }
-
-    const activeSuperAdmins = registeredEmails.filter(
-      (r) => r.systemRole === 'super_admin'
-    );
-    if (
-      targetRec?.systemRole === 'super_admin' &&
-      activeSuperAdmins.length <= 1
-    ) {
-      throw new Error(
-        'Proteksi Keamanan: Tidak dapat menghapus satu-satunya Super Admin yang tersisa.'
       );
     }
 
@@ -1771,41 +1328,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               member_id: targetMemberId,
               action: 'remove',
               confirm_member_name: targetRec?.name,
-              reason: 'Penghapusan email oleh Super Admin',
+              reason: 'Penghapusan akun oleh Super Admin',
             },
           }
         );
         if (error) {
-          let detail = error.message;
-          try {
-            const errBody = await (error as any).context?.json();
-            if (errBody?.error) detail = errBody.error;
-          } catch {}
+          const detail = await extractEdgeFunctionError(
+            error,
+            'Pencabutan akun gagal'
+          );
           throw new Error(detail);
         }
         if (!data?.success) {
-          throw new Error(data?.error || 'Pencabutan email gagal');
+          throw new Error(data?.error || 'Pencabutan akun gagal');
         }
       } catch (e: any) {
         console.warn('Supabase deleteMemberAccount notice:', e);
         throw e;
       }
-    }
-
-    try {
-      await fetch('/api/admin/account-action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'delete',
-          adminEmail: user?.email || SUPER_ADMIN_EMAIL,
-          email: targetEmail,
-          uid: targetUid,
-          memberId: targetMemberId,
-        }),
-      });
-    } catch {
-      // Non-fatal
     }
 
     const updatedList = registeredEmails.filter(
@@ -1822,62 +1362,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const createInvitation = async (
-    name: string,
-    email: string,
-    role: UserRole,
-    division: string
-  ): Promise<string> => {
-    const created = await registerMemberEmail({
-      name,
-      email,
-      position: role === 'dpl' ? 'Dosen Pembimbing Lapangan' : 'Anggota KKN',
-      division,
-      role,
-      systemRole: role === 'admin' || role === 'ketua' ? 'admin' : 'user',
-    });
-    return created.email;
-  };
-
-  const fetchInvitations = async (): Promise<InvitationItem[]> => {
-    const list = await fetchRegisteredEmails();
-    return list.map((r) => ({
-      id: r.id,
-      token: r.email,
-      name: r.name,
-      email: r.email,
-      role: r.role || 'member',
-      division: r.division,
-      status:
-        r.status === 'activated'
-          ? 'accepted'
-          : r.status === 'revoked'
-            ? 'revoked'
-            : 'pending',
-      memberId: r.memberId,
-      acceptedByUid: r.activatedUid,
-      acceptedAt: r.activatedAt,
-    }));
-  };
-
-  const revokeInvitation = async (idOrEmail: string) => {
-    const found = registeredEmails.find(
-      (r) => r.id === idOrEmail || r.email === idOrEmail
-    );
-    if (found) {
-      await revokeRegisteredEmail(found.email);
-    }
-  };
-
-  const activateInvitation = async (
-    _tokenInput: string,
-    email: string,
-    pass: string,
-    _displayName: string
-  ) => {
-    await activateWithRegisteredEmail(email, pass);
-  };
-
   const signOut = async () => {
     isManualSignOutRef.current = true;
     hadActiveSessionRef.current = false;
@@ -1885,7 +1369,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (isSupabaseConfigured) {
       await supabase.auth.signOut();
     }
-    setIsPasswordRecoveryMode(false);
+    setMustChangePassword(false);
+    setIsTemporaryPasswordExpired(false);
+    setTemporaryPasswordExpiresAt(null);
     setSessionExpiredNotice(null);
     setSession(null);
     setUser(null);
@@ -1920,39 +1406,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       displayName: updates.displayName?.trim() || profile.displayName,
       position: updates.position?.trim() || profile.position,
       division: updates.division?.trim() || profile.division,
-      // Explicitly preserve security-critical role & authorization fields
       role: profile.role,
       systemRole: profile.systemRole,
       uid: profile.uid,
       email: profile.email,
       memberId: profile.memberId,
+      databaseMemberId: profile.databaseMemberId,
       accountStatus: profile.accountStatus,
+      mustChangePassword: profile.mustChangePassword,
     };
     setProfile(nextProfile);
     saveCachedProfile(user.uid, nextProfile);
-
-    if (user.email) {
-      const cleanEmail = user.email.toLowerCase();
-      setRegisteredEmails((prev) => {
-        const next = prev.map((r) =>
-          r.email.toLowerCase() === cleanEmail
-            ? {
-                ...r,
-                name: nextProfile.displayName,
-                position: nextProfile.position || r.position,
-                division: nextProfile.division || r.division,
-                // Never modify systemRole, role, or status here
-              }
-            : r
-        );
-        return next;
-      });
-    }
   };
 
-  const isSuperAdmin =
+  // Role flags derived strictly from resolved profile roles and dual-mode Super Admin
+  const isSuperAdmin = Boolean(
     profile?.systemRole === 'super_admin' ||
-    user?.email?.toLowerCase() === SUPER_ADMIN_EMAIL;
+    profile?.email?.toLowerCase() === 'abhyy333@gmail.com' ||
+    user?.rawSupabaseUser?.app_metadata?.kkn_is_super_admin === true ||
+    user?.rawSupabaseUser?.user_metadata?.kkn_is_super_admin === true
+  );
   const isAdmin =
     isSuperAdmin ||
     profile?.systemRole === 'admin' ||
@@ -1960,8 +1433,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     profile?.role === 'admin';
   const isMember =
     isAdmin || profile?.role === 'member' || Boolean(profile?.memberId);
-  const isDpl = profile?.role === 'dpl';
-  const canWrite = isAdmin || isMember;
+  const isDpl = profile?.role === 'dpl' || profile?.systemRole === 'dpl';
+  const canWrite = (isAdmin || isMember) && !mustChangePassword;
 
   return (
     <AuthContext.Provider
@@ -1974,8 +1447,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         sessionExpiredNotice,
         clearSessionExpiredNotice,
         isSupabaseReady: isSupabaseConfigured,
-        isPasswordRecoveryMode,
-        clearPasswordRecoveryMode,
+        mustChangePassword,
+        requiresPasswordChange: mustChangePassword,
+        isTemporaryPasswordExpired,
+        temporaryPasswordExpiresAt,
         isAdmin,
         isSuperAdmin,
         isMember,
@@ -1987,24 +1462,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         adminLogs,
         signInWithGoogle,
         signInWithEmail,
-        checkRegisteredEmail,
-        activateWithRegisteredEmail,
-        resendVerificationEmail,
-        requestPasswordReset,
-        updateUserPassword,
+        checkMyAccountSecurityStatus,
+        completeFirstLoginPassword,
+        provisionMemberAccount,
+        resetMemberPassword,
         fetchRegisteredEmails,
         fetchActivityLogs,
-        registerMemberEmail,
         updateRegisteredEmail,
         revokeRegisteredEmail,
         disableMemberAccount,
         restoreMemberAccount,
         deleteMemberAccount,
         logAdminActivity,
-        createInvitation,
-        fetchInvitations,
-        revokeInvitation,
-        activateInvitation,
         signOut,
         updateUserRole,
         syncOwnProfileMetadata,

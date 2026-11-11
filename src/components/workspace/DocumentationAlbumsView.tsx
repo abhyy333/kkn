@@ -990,7 +990,7 @@ export const DocumentationAlbumsView: React.FC<DocumentationAlbumsViewProps> = (
               <div>
                 <div className="relative aspect-4/3 bg-stone-100 overflow-hidden group">
                   <img
-                    src={photo.imageUrl}
+                    src={photo.imageUrl || undefined}
                     alt={photo.caption}
                     onClick={() => setActiveLightboxIndex(index)}
                     className="w-full h-full object-cover cursor-pointer group-hover:scale-105 transition-transform duration-300"
@@ -1156,7 +1156,7 @@ export const DocumentationAlbumsView: React.FC<DocumentationAlbumsViewProps> = (
               </button>
 
               <img
-                src={selectedAlbum.photos[activeLightboxIndex].imageUrl}
+                src={selectedAlbum.photos[activeLightboxIndex].imageUrl || undefined}
                 alt={selectedAlbum.photos[activeLightboxIndex].caption}
                 className="max-h-[72vh] max-w-[88vw] object-contain rounded-lg shadow-2xl"
               />
@@ -1479,7 +1479,7 @@ export const DocumentationAlbumsView: React.FC<DocumentationAlbumsViewProps> = (
                   >
                     <div className="relative aspect-4/3 rounded-lg overflow-hidden bg-stone-100">
                       <img
-                        src={dp.imageUrl}
+                        src={dp.imageUrl || undefined}
                         alt={dp.caption}
                         className="w-full h-full object-cover"
                       />
@@ -1634,7 +1634,7 @@ export const DocumentationAlbumsView: React.FC<DocumentationAlbumsViewProps> = (
               <div>
                 <div className="relative aspect-16/10 bg-stone-100 overflow-hidden">
                   <img
-                    src={coverUrl}
+                    src={coverUrl || undefined}
                     alt={album.title}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                   />
@@ -1692,7 +1692,7 @@ export const DocumentationAlbumsView: React.FC<DocumentationAlbumsViewProps> = (
                   {album.photos.slice(0, 4).map((p) => (
                     <img
                       key={p.id}
-                      src={p.imageUrl}
+                      src={p.imageUrl || undefined}
                       alt={p.caption}
                       className="w-8 h-8 rounded-lg object-cover border-2 border-white shadow-2xs"
                     />

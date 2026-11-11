@@ -586,7 +586,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
                     className="h-full rounded-2xl bg-white border border-[#E8E6DF] overflow-hidden hover:border-[#4A6B53] hover:shadow-md cursor-pointer transition-all flex items-center gap-4 p-4"
                   >
                     <img
-                      src={alb.coverImageUrl || alb.photos[0]?.imageUrl}
+                      src={alb.coverImageUrl || alb.photos[0]?.imageUrl || undefined}
                       alt={alb.title}
                       className="w-20 h-20 rounded-xl object-cover shrink-0 bg-stone-100"
                     />
@@ -961,7 +961,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
                   >
                     <div className="aspect-16/9 bg-stone-100">
                       <img
-                        src={alb.coverImageUrl || alb.photos[0]?.imageUrl}
+                        src={alb.coverImageUrl || alb.photos[0]?.imageUrl || undefined}
                         alt={alb.title}
                         className="w-full h-full object-cover"
                       />
@@ -1194,7 +1194,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
               >
                 <div className="relative aspect-4/3 bg-stone-100 overflow-hidden">
                   <img
-                    src={photo.imageUrl}
+                    src={photo.imageUrl || undefined}
                     alt={photo.caption}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                   />
@@ -1243,7 +1243,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
                 </button>
 
                 <img
-                  src={album.photos[lightboxPhotoIndex].imageUrl}
+                  src={album.photos[lightboxPhotoIndex].imageUrl || undefined}
                   alt={album.photos[lightboxPhotoIndex].caption}
                   className="max-h-[75vh] max-w-[88vw] object-contain rounded-lg shadow-2xl"
                 />
@@ -1380,7 +1380,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
                   <div>
                     <div className="relative aspect-16/10 bg-stone-100 overflow-hidden">
                       <img
-                        src={cover}
+                        src={cover || undefined}
                         alt={album.title}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                       />
@@ -1428,7 +1428,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
                       {album.photos.slice(0, 4).map((p) => (
                         <img
                           key={p.id}
-                          src={p.imageUrl}
+                          src={p.imageUrl || undefined}
                           alt={p.caption}
                           className="w-8 h-8 rounded-lg object-cover border-2 border-white shadow-2xs"
                         />
@@ -1512,7 +1512,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
             {article.coverImageUrl && (
               <div className="aspect-16/9 w-full bg-stone-100 overflow-hidden">
                 <img
-                  src={article.coverImageUrl}
+                  src={article.coverImageUrl || undefined}
                   alt={article.title}
                   className="w-full h-full object-cover"
                 />
@@ -2076,7 +2076,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
                   <div>
                     <div className="aspect-16/9 w-full bg-stone-100 overflow-hidden">
                       <img
-                        src={art.coverImageUrl}
+                        src={art.coverImageUrl || undefined}
                         alt={art.title}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                       />

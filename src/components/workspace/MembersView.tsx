@@ -686,7 +686,7 @@ export const MembersView: React.FC<MembersViewProps> = ({
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="relative shrink-0">
                           <img
-                            src={m.avatar}
+                            src={m.avatar || undefined}
                             alt={m.name}
                             className="w-12 h-12 rounded-full object-cover border-2 border-white ring-1 ring-emerald-200/80 shadow-2xs"
                           />
@@ -877,7 +877,7 @@ export const MembersView: React.FC<MembersViewProps> = ({
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="relative shrink-0">
                         <img
-                          src={m.avatar}
+                          src={m.avatar || undefined}
                           alt={m.name}
                           className="w-12 h-12 rounded-full object-cover border-2 border-white ring-1 ring-amber-300/80 opacity-90 shadow-2xs"
                         />

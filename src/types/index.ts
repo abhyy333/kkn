@@ -75,6 +75,9 @@ export interface AdminActivityLogRecord {
   adminName: string;
   action:
     | 'BOOTSTRAP_SUPER_ADMIN'
+    | 'PROVISION_MEMBER_ACCOUNT'
+    | 'RESET_MEMBER_PASSWORD'
+    | 'COMPLETE_FIRST_LOGIN_PASSWORD'
     | 'REGISTER_MEMBER_EMAIL'
     | 'UPDATE_REGISTERED_EMAIL'
     | 'ACTIVATE_ACCOUNT'
@@ -193,6 +196,7 @@ export interface NavSection {
 
 export interface Member {
   id: string;
+  databaseId?: string;
   dbId?: string;
   name: string;
   role: string;
@@ -213,6 +217,7 @@ export interface Member {
   responsibilities?: string[];
   systemRole?: SystemRole;
   accountStatus?: 'unregistered' | 'pending' | 'pending_activation' | 'active' | 'disabled' | 'pending_invitation';
+  mustChangePassword?: boolean;
   authUid?: string;
   acceptedAt?: any;
   disabledAt?: string;

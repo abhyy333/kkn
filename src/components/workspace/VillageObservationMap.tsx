@@ -425,7 +425,7 @@ export const VillageObservationMap: React.FC<VillageObservationMapProps> = ({
                         className="group relative rounded overflow-hidden border border-[#E8E6DF] aspect-16/10 bg-stone-100 cursor-pointer"
                       >
                         <img
-                          src={p.imageUrl}
+                          src={p.imageUrl || undefined}
                           alt={p.title}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                         />
